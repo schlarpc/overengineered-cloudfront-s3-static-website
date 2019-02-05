@@ -1,20 +1,21 @@
+from awacs import logs, s3, sqs, sts
+from awacs.aws import Allow, PolicyDocument, Principal, Statement
 from troposphere import (
-    AccountId,
-    GetAtt,
-    Join,
-    Output,
-    Ref,
-    Template,
     AWS_PARTITION,
-    Region,
     AccountId,
-    NoValue,
-    Parameter,
     Equals,
-    Not,
+    GetAtt,
     If,
+    Join,
+    NoValue,
+    Not,
+    Output,
+    Parameter,
+    Ref,
+    Region,
     Select,
     Tags,
+    Template,
 )
 from troposphere.s3 import (
     AbortIncompleteMultipartUpload,
@@ -32,6 +33,15 @@ from troposphere.s3 import (
     ServerSideEncryptionByDefault,
     ServerSideEncryptionRule,
 )
+from troposphere.awslambda import (
+    Code,
+    DeadLetterConfig,
+    Environment,
+    Function,
+    Permission,
+    Version,
+)
+from troposphere.certificatemanager import Certificate
 from troposphere.cloudfront import (
     CloudFrontOriginAccessIdentity,
     CloudFrontOriginAccessIdentityConfig,
@@ -45,22 +55,10 @@ from troposphere.cloudfront import (
     S3OriginConfig,
     ViewerCertificate,
 )
-from troposphere.sqs import Queue
-from troposphere.logs import LogGroup
-from troposphere.awslambda import (
-    Code,
-    DeadLetterConfig,
-    Function,
-    Permission,
-    Version,
-    Environment,
-)
-from troposphere.iam import PolicyProperty, PolicyType, Role
 from troposphere.events import Rule, Target
-from troposphere.certificatemanager import Certificate
-
-from awacs import logs, s3, sqs, sts
-from awacs.aws import Allow, PolicyDocument, Principal, Statement
+from troposphere.iam import PolicyProperty, PolicyType, Role
+from troposphere.logs import LogGroup
+from troposphere.sqs import Queue
 
 import datetime
 import hashlib
@@ -71,6 +69,7 @@ import textwrap
 import packmodule
 
 from . import certificate_validator, log_ingest
+
 
 Partition = Ref(AWS_PARTITION)
 
