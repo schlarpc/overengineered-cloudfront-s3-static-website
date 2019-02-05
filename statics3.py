@@ -62,6 +62,7 @@ from troposphere.certificatemanager import Certificate
 from awacs import logs, s3, sqs, sts
 from awacs.aws import Allow, PolicyDocument, Principal, Statement
 
+import argparse
 import datetime
 import hashlib
 import inspect
@@ -718,5 +719,19 @@ def create_template():
     return template
 
 
+def get_args(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--minify", action="store_true", default=False)
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = get_args(argv)
+    json_kwargs = {"sort_keys": True}
+    if args.minify:
+        json_kwargs.update({"indent": None, "separators": (",", ":")})
+    print(create_template().to_json(**json_kwargs))
+
+
 if __name__ == "__main__":
-    print(create_template().to_json())
+    main()
