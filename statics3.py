@@ -14,6 +14,7 @@ from troposphere import (
     Not,
     If,
     Select,
+    Tags,
 )
 from troposphere.s3 import (
     AbortIncompleteMultipartUpload,
@@ -46,8 +47,17 @@ from troposphere.cloudfront import (
 )
 from troposphere.sqs import Queue
 from troposphere.logs import LogGroup
-from troposphere.awslambda import Code, DeadLetterConfig, Function, Permission, Version
+from troposphere.awslambda import (
+    Code,
+    DeadLetterConfig,
+    Function,
+    Permission,
+    Version,
+    Environment,
+)
 from troposphere.iam import PolicyProperty, PolicyType, Role
+from troposphere.events import Rule, Target
+from troposphere.certificatemanager import Certificate
 
 from awacs import logs, s3, sqs, sts
 from awacs.aws import Allow, PolicyDocument, Principal, Statement
@@ -58,6 +68,7 @@ import inspect
 import json
 import textwrap
 
+import certificate_validator
 import log_ingest
 import packmodule
 
@@ -78,6 +89,16 @@ def create_template():
             Description="Existing ACM certificate ARN to use for serving TLS",
             Type="String",
             AllowedPattern="(arn:[^:]+:acm:[^:]+:[^:]+:certificate/.+|)",
+            Default="",
+        )
+    )
+
+    hosted_zone_id = template.add_parameter(
+        Parameter(
+            "HostedZoneId",
+            Description="Existing Route 53 zone to use for verifying TLS certificate",
+            Type="String",
+            AllowedPattern="(Z[A-Z0-9]+|)",
             Default="",
         )
     )
@@ -139,6 +160,10 @@ def create_template():
 
     using_acm_certificate = add_condition(
         template, "UsingAcmCertificate", Not(Equals(Ref(acm_certificate_arn), ""))
+    )
+
+    using_hosted_zone = add_condition(
+        template, "UsingHostedZone", Not(Equals(Ref(hosted_zone_id), ""))
     )
 
     using_dns_names = add_condition(
@@ -410,6 +435,137 @@ def create_template():
         )
     )
 
+    certificate_validator_dlq = template.add_resource(
+        Queue(
+            "CertificateValidatorDLQ",
+            MessageRetentionPeriod=int(datetime.timedelta(days=14).total_seconds()),
+            KmsMasterKeyId="alias/aws/sqs",
+        )
+    )
+
+    certificate_validator_role = template.add_resource(
+        Role(
+            "CertificateValidatorRole",
+            AssumeRolePolicyDocument=PolicyDocument(
+                Version="2012-10-17",
+                Statement=[
+                    Statement(
+                        Effect="Allow",
+                        Principal=Principal("Service", "lambda.amazonaws.com"),
+                        Action=[sts.AssumeRole],
+                    )
+                ],
+            ),
+            Policies=[
+                PolicyProperty(
+                    PolicyName="DLQPolicy",
+                    PolicyDocument=PolicyDocument(
+                        Version="2012-10-17",
+                        Statement=[
+                            Statement(
+                                Effect=Allow,
+                                Action=[sqs.SendMessage],
+                                Resource=[GetAtt(certificate_validator_dlq, "Arn")],
+                            )
+                        ],
+                    ),
+                )
+            ],
+            # TODO scope down
+            ManagedPolicyArns=[
+                "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+                "arn:aws:iam::aws:policy/AmazonRoute53FullAccess",
+            ],
+        )
+    )
+
+    certificate_validator_function = template.add_resource(
+        Function(
+            "CertificateValidatorFunction",
+            Runtime="python3.6",
+            Handler="index.{}".format(certificate_validator.handler.__name__),
+            Code=Code(
+                ZipFile=packmodule.pack(inspect.getsource(certificate_validator))
+            ),
+            MemorySize=256,
+            Timeout=300,
+            Role=GetAtt(certificate_validator_role, "Arn"),
+            DeadLetterConfig=DeadLetterConfig(
+                TargetArn=GetAtt(certificate_validator_dlq, "Arn")
+            ),
+            Environment=Environment(
+                Variables={
+                    certificate_validator.EnvVars.HOSTED_ZONE_ID.name: Ref(
+                        hosted_zone_id
+                    )
+                }
+            ),
+        )
+    )
+
+    certificate_validator_log_group = template.add_resource(
+        LogGroup(
+            "CertificateValidatorLogGroup",
+            LogGroupName=Join(
+                "", ["/aws/lambda/", Ref(certificate_validator_function)]
+            ),
+            RetentionInDays=Ref(log_retention_days),
+        )
+    )
+
+    certificate_validator_rule = template.add_resource(
+        Rule(
+            "CertificateValidatorRule",
+            EventPattern={
+                "detail-type": ["AWS API Call via CloudTrail"],
+                "detail": {
+                    "eventSource": ["acm.amazonaws.com"],
+                    "eventName": ["AddTagsToCertificate"],
+                    "requestParameters": {
+                        "tags": {
+                            "key": [certificate_validator_function.title],
+                            "value": [GetAtt(certificate_validator_function, "Arn")],
+                        }
+                    },
+                },
+            },
+            Targets=[
+                Target(
+                    Id="certificate-validator-lambda",
+                    Arn=GetAtt(certificate_validator_function, "Arn"),
+                )
+            ],
+            DependsOn=[certificate_validator_log_group],
+        )
+    )
+
+    certificate_validator_permission = template.add_resource(
+        Permission(
+            "CertificateValidatorPermission",
+            FunctionName=GetAtt(certificate_validator_function, "Arn"),
+            Action="lambda:InvokeFunction",
+            Principal="events.amazonaws.com",
+            SourceArn=GetAtt(certificate_validator_rule, "Arn"),
+        )
+    )
+
+    certificate = template.add_resource(
+        Certificate(
+            "Certificate",
+            DomainName=Select(0, Ref(dns_names)),
+            SubjectAlternativeNames=Ref(dns_names),  # duplicate first name works fine
+            ValidationMethod="DNS",
+            Tags=Tags(
+                **{
+                    certificate_validator_function.title: GetAtt(
+                        certificate_validator_function, "Arn"
+                    )
+                }
+            ),
+            DependsOn=[certificate_validator_permission],
+        )
+    )
+
     edge_hook_role = template.add_resource(
         Role(
             "EdgeHookRole",
@@ -426,12 +582,14 @@ def create_template():
                     )
                 ],
             ),
+            # TODO scope down
             ManagedPolicyArns=[
                 "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
             ],
         )
     )
 
+    # TODO known issue: no log group capture for replicated lambda
     edge_hook_function = template.add_resource(
         Function(
             "EdgeHookFunction",
@@ -510,9 +668,9 @@ def create_template():
                 HttpVersion="http2",
                 IPV6Enabled=True,
                 ViewerCertificate=If(
-                    using_acm_certificate,
+                    using_hosted_zone,
                     ViewerCertificate(
-                        AcmCertificateArn=Ref(acm_certificate_arn),
+                        AcmCertificateArn=Ref(certificate),
                         SslSupportMethod="sni-only",
                         MinimumProtocolVersion=Ref(tls_protocol_version),
                     ),
