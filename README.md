@@ -58,3 +58,5 @@ The template parameters also include some extra settings:
 * No usage of KMS encryption for S3 buckets (AWS limitations)
 * Some Lambda execution policies are overly broad
 * Log groups for Lambda@Edge replicated functions are not captured in the template
+* Stack deletion will fail on the Lambda@Edge function but will succeed after several hours (AWS limitation)
+* Directory URLs must end in "/" to get index.html retrieval behavior (e.g http://example.com/foo will not return the content at foo/index.html)
