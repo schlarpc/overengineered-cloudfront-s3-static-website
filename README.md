@@ -24,7 +24,7 @@ To deploy a CloudFront distribution with automatic TLS certificates from ACM:
 aws cloudformation --region us-east-1 deploy --stack-name automatic-acm-distribution \
     --template-file <(python3 -m overengineered_cloudfront_s3_static_website) \
     --capabilities CAPABILITY_IAM \
-    --parameter-overrides DomainNames=example.com,www.example.com HostedZoneId=Z1XYZ12XYZ1XYZ \
+    --parameter-overrides DomainNames=example.com,www.example.com HostedZoneId=Z1XYZ12XYZ1XYZ
 ```
 
 To deploy a CloudFront distribution with an existing ACM certificate:
