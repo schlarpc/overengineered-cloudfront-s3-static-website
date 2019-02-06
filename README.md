@@ -13,7 +13,7 @@ To generate the CloudFormation template:
 
 `python3 -m overengineered_cloudfront_s3_static_website`
 
-To deploy a basic CloudFront distribution:
+To deploy a basic website with a CloudFront-generated domain name:
 
 ```
 aws cloudformation --region us-east-1 deploy --stack-name basic-distribution \
@@ -21,7 +21,7 @@ aws cloudformation --region us-east-1 deploy --stack-name basic-distribution \
     --capabilities CAPABILITY_IAM
 ```
 
-To deploy a CloudFront distribution with automatic TLS certificates from ACM:
+To deploy a website with automatic TLS certificates (given your DNS is hosted on Route 53):
 
 ```
 aws cloudformation --region us-east-1 deploy --stack-name automatic-acm-distribution \
@@ -30,7 +30,7 @@ aws cloudformation --region us-east-1 deploy --stack-name automatic-acm-distribu
     --parameter-overrides DomainNames=example.com,www.example.com HostedZoneId=Z1XYZ12XYZ1XYZ
 ```
 
-To deploy a CloudFront distribution with an existing ACM certificate:
+To deploy a website with an existing ACM certificate:
 
 ```
 aws cloudformation --region us-east-1 deploy --stack-name existing-acm-distribution \
@@ -39,6 +39,9 @@ aws cloudformation --region us-east-1 deploy --stack-name existing-acm-distribut
     --parameter-overrides DomainNames=example.com,www.example.com \
     AcmCertificateArn=arn:aws:acm:us-east-1:123412341234:certificate/d3ad-b33f
 ```
+
+Once the CloudFormation stack is deployed, check the stack outputs for `ContentBucketArn`.
+Using the tool of your choice, upload your website content into that bucket and you're good to go.
 
 The template parameters also include some extra settings:
 
