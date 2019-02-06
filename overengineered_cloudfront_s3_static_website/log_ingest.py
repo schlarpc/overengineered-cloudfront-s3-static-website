@@ -52,18 +52,13 @@ def get_s3_stream(key_basename, body):
 
 def get_cloudfront_stream(key_basename, body):
     def _create_stream():
-        skipped_messages = []
         for line in gzip.GzipFile(fileobj=body):
             message = line.rstrip(b"\r\n")
             if message.startswith(b"#"):
-                skipped_messages.append(message)
                 continue
             timestamp = datetime.datetime.strptime(
                 b" ".join(message.split(b"\t")[:2]).decode("utf-8"), "%Y-%m-%d %H:%M:%S"
             )
-            for skipped_message in skipped_messages:
-                yield LogEvent(timestamp=timestamp, message=skipped_message)
-            skipped_messages = []
             yield LogEvent(timestamp=timestamp, message=message)
 
     distribution_name, log_name = key_basename.rstrip(".gz").split(".", 1)
