@@ -3,6 +3,8 @@ from awacs.aws import Allow, PolicyDocument, Principal, Statement
 from troposphere import (
     AWS_PARTITION,
     AccountId,
+    And,
+    Condition,
     Equals,
     GetAtt,
     If,
@@ -163,6 +165,12 @@ def create_template():
 
     using_hosted_zone = add_condition(
         template, "UsingHostedZone", Not(Equals(Ref(hosted_zone_id), ""))
+    )
+
+    should_create_certificate = add_condition(
+        template,
+        "ShouldCreateCertificate",
+        And(Condition(using_hosted_zone), Not(Condition(using_acm_certificate))),
     )
 
     using_dns_names = add_condition(
@@ -439,6 +447,7 @@ def create_template():
             "CertificateValidatorDLQ",
             MessageRetentionPeriod=int(datetime.timedelta(days=14).total_seconds()),
             KmsMasterKeyId="alias/aws/sqs",
+            Condition=should_create_certificate,
         )
     )
 
@@ -475,6 +484,7 @@ def create_template():
                 "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
                 "arn:aws:iam::aws:policy/AmazonRoute53FullAccess",
             ],
+            Condition=should_create_certificate,
         )
     )
 
@@ -499,6 +509,7 @@ def create_template():
                     )
                 }
             ),
+            Condition=should_create_certificate,
         )
     )
 
@@ -509,6 +520,7 @@ def create_template():
                 "", ["/aws/lambda/", Ref(certificate_validator_function)]
             ),
             RetentionInDays=Ref(log_retention_days),
+            Condition=should_create_certificate,
         )
     )
 
@@ -535,6 +547,7 @@ def create_template():
                 )
             ],
             DependsOn=[certificate_validator_log_group],
+            Condition=should_create_certificate,
         )
     )
 
@@ -545,6 +558,7 @@ def create_template():
             Action="lambda:InvokeFunction",
             Principal="events.amazonaws.com",
             SourceArn=GetAtt(certificate_validator_rule, "Arn"),
+            Condition=should_create_certificate,
         )
     )
 
@@ -562,6 +576,7 @@ def create_template():
                 }
             ),
             DependsOn=[certificate_validator_permission],
+            Condition=should_create_certificate,
         )
     )
 
