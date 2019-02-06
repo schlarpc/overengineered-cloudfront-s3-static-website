@@ -11,6 +11,7 @@ from troposphere import (
     Join,
     NoValue,
     Not,
+    Or,
     Output,
     Parameter,
     Ref,
@@ -82,12 +83,17 @@ def add_condition(template, name, condition):
 
 
 def create_template():
-    template = Template(Description="Static website hosted with S3 and CloudFront")
+    template = Template(
+        Description=(
+            "Static website hosted with S3 and CloudFront. "
+            "https://github.com/schlarpc/overengineered-cloudfront-s3-static-website"
+        )
+    )
 
     acm_certificate_arn = template.add_parameter(
         Parameter(
             "AcmCertificateArn",
-            Description="Existing ACM certificate ARN to use for serving TLS",
+            Description="Existing ACM certificate to use for serving TLS. Overrides HostedZoneId.",
             Type="String",
             AllowedPattern="(arn:[^:]+:acm:[^:]+:[^:]+:certificate/.+|)",
             Default="",
@@ -97,7 +103,7 @@ def create_template():
     hosted_zone_id = template.add_parameter(
         Parameter(
             "HostedZoneId",
-            Description="Existing Route 53 zone to use for verifying TLS certificate",
+            Description="Existing Route 53 zone to use for validating a new TLS certificate.",
             Type="String",
             AllowedPattern="(Z[A-Z0-9]+|)",
             Default="",
@@ -107,7 +113,7 @@ def create_template():
     dns_names = template.add_parameter(
         Parameter(
             "DomainNames",
-            Description="Comma-separated list of additional domain names to serve",
+            Description="Comma-separated list of additional domain names to serve.",
             Type="CommaDelimitedList",
             Default="",
         )
@@ -116,7 +122,7 @@ def create_template():
     tls_protocol_version = template.add_parameter(
         Parameter(
             "TlsProtocolVersion",
-            Description="CloudFront TLS security policy, see https://amzn.to/2DR91Xq for details",
+            Description="CloudFront TLS security policy; see https://amzn.to/2DR91Xq for details.",
             Type="String",
             Default="TLSv1.1_2016",
         )
@@ -125,7 +131,7 @@ def create_template():
     log_retention_days = template.add_parameter(
         Parameter(
             "LogRetentionDays",
-            Description="Days to keep CloudFront, S3, and Lambda logs",
+            Description="Days to keep CloudFront, S3, and Lambda logs.",
             Type="Number",
             AllowedValues=[
                 1,
@@ -153,7 +159,7 @@ def create_template():
     default_ttl_seconds = template.add_parameter(
         Parameter(
             "DefaultTtlSeconds",
-            Description="Cache TTL when not set by S3 object headers",
+            Description="Cache time-to-live when not set by S3 object headers.",
             Type="Number",
             Default=int(datetime.timedelta(minutes=5).total_seconds()),
         )
@@ -165,6 +171,10 @@ def create_template():
 
     using_hosted_zone = add_condition(
         template, "UsingHostedZone", Not(Equals(Ref(hosted_zone_id), ""))
+    )
+
+    using_certificate = add_condition(
+        template, "UsingCertificate", Or(Condition(using_acm_certificate), Condition(using_hosted_zone))
     )
 
     should_create_certificate = add_condition(
@@ -483,6 +493,7 @@ def create_template():
             ManagedPolicyArns=[
                 "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
                 "arn:aws:iam::aws:policy/AmazonRoute53FullAccess",
+                "arn:aws:iam::aws:policy/AWSCertificateManagerReadOnly",
             ],
             Condition=should_create_certificate,
         )
@@ -681,17 +692,19 @@ def create_template():
                 ),
                 HttpVersion="http2",
                 IPV6Enabled=True,
-                ViewerCertificate=If(
-                    using_hosted_zone,
-                    ViewerCertificate(
-                        AcmCertificateArn=Ref(certificate),
-                        SslSupportMethod="sni-only",
-                        MinimumProtocolVersion=Ref(tls_protocol_version),
+                ViewerCertificate=ViewerCertificate(
+                    AcmCertificateArn=If(
+                        using_acm_certificate,
+                        Ref(acm_certificate_arn),
+                        If(
+                            using_hosted_zone,
+                            Ref(certificate),
+                            NoValue,
+                        )
                     ),
-                    ViewerCertificate(
-                        CloudFrontDefaultCertificate=True,
-                        MinimumProtocolVersion=Ref(tls_protocol_version),
-                    ),
+                    SslSupportMethod=If(using_certificate, "sni-only", NoValue),
+                    CloudFrontDefaultCertificate=If(using_certificate, NoValue, True),
+                    MinimumProtocolVersion=Ref(tls_protocol_version),
                 ),
             ),
             DependsOn=[log_ingester_policy],
