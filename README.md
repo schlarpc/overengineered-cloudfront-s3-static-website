@@ -1,8 +1,11 @@
 # overengineered-cloudfront-s3-static-website
 
 This aims to be the best damn static website you can host on AWS without a server.
-Includes automatic certificate issuance with ACM and Route 53, default index.html serving,
-searchable logs, modern networking, and more.
+Includes automatic certificate issuance with Amazon Certificate Manager and Route 53,
+default index.html serving on all directories, searchable logs, modern networking, and more.
+
+All services used by default are either included in the AWS free tier or have low cost
+usage-based billing, making it suitable for projects of any size.
 
 ## Usage
 
