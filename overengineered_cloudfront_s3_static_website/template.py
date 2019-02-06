@@ -174,7 +174,9 @@ def create_template():
     )
 
     using_certificate = add_condition(
-        template, "UsingCertificate", Or(Condition(using_acm_certificate), Condition(using_hosted_zone))
+        template,
+        "UsingCertificate",
+        Or(Condition(using_acm_certificate), Condition(using_hosted_zone)),
     )
 
     should_create_certificate = add_condition(
@@ -696,11 +698,7 @@ def create_template():
                     AcmCertificateArn=If(
                         using_acm_certificate,
                         Ref(acm_certificate_arn),
-                        If(
-                            using_hosted_zone,
-                            Ref(certificate),
-                            NoValue,
-                        )
+                        If(using_hosted_zone, Ref(certificate), NoValue),
                     ),
                     SslSupportMethod=If(using_certificate, "sni-only", NoValue),
                     CloudFrontDefaultCertificate=If(using_certificate, NoValue, True),

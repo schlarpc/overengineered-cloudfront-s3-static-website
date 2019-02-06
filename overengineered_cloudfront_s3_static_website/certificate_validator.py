@@ -16,10 +16,12 @@ class EnvVars(enum.Enum):
 def handler(event, context=None):
     print(json.dumps(event))
     certificate_arn = event["detail"]["requestParameters"]["certificateArn"]
-    acm = boto3.client('acm')
+    acm = boto3.client("acm")
     response = acm.describe_certificate(CertificateArn=certificate_arn)
-    records = jmespath.search('Certificate.DomainValidationOptions[].ResourceRecord', response)
-    route53 = boto3.client('route53')
+    records = jmespath.search(
+        "Certificate.DomainValidationOptions[].ResourceRecord", response
+    )
+    route53 = boto3.client("route53")
     response = route53.change_resource_record_sets(
         HostedZoneId=EnvVars.HOSTED_ZONE_ID.value,
         ChangeBatch={
@@ -30,12 +32,10 @@ def handler(event, context=None):
                         "Name": record["Name"],
                         "Type": record["Type"],
                         "TTL": 300,
-                        "ResourceRecords": [{
-                            "Value": record["Value"],
-                        }],
+                        "ResourceRecords": [{"Value": record["Value"]}],
                     },
                 }
                 for record in records
-            ],
-        }
+            ]
+        },
     )
