@@ -16,7 +16,7 @@ To generate the CloudFormation template:
 To deploy a basic website with a CloudFront-generated domain name:
 
 ```
-aws cloudformation --region us-east-1 deploy --stack-name basic-distribution \
+aws cloudformation deploy --region us-east-1 --stack-name basic-distribution \
     --template-file <(python3 -m overengineered_cloudfront_s3_static_website) \
     --capabilities CAPABILITY_IAM
 ```
@@ -24,7 +24,7 @@ aws cloudformation --region us-east-1 deploy --stack-name basic-distribution \
 To deploy a website with automatic TLS certificates (given your DNS is hosted on Route 53):
 
 ```
-aws cloudformation --region us-east-1 deploy --stack-name automatic-acm-distribution \
+aws cloudformation deploy --region us-east-1 --stack-name automatic-acm-distribution \
     --template-file <(python3 -m overengineered_cloudfront_s3_static_website) \
     --capabilities CAPABILITY_IAM \
     --parameter-overrides DomainNames=example.com,www.example.com HostedZoneId=Z1XYZ12XYZ1XYZ
@@ -33,7 +33,7 @@ aws cloudformation --region us-east-1 deploy --stack-name automatic-acm-distribu
 To deploy a website with an existing ACM certificate:
 
 ```
-aws cloudformation --region us-east-1 deploy --stack-name existing-acm-distribution \
+aws cloudformation deploy --region us-east-1 --stack-name existing-acm-distribution \
     --template-file <(python3 -m overengineered_cloudfront_s3_static_website) \
     --capabilities CAPABILITY_IAM \
     --parameter-overrides DomainNames=example.com,www.example.com \
