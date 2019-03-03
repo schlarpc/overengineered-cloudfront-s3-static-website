@@ -30,7 +30,6 @@ from troposphere.s3 import (
     LifecycleRule,
     LifecycleRuleTransition,
     LoggingConfiguration,
-    MetricsConfiguration,
     NotificationConfiguration,
     PublicAccessBlockConfiguration,
     ServerSideEncryptionByDefault,
@@ -285,7 +284,6 @@ def create_template():
                     )
                 ]
             ),
-            MetricsConfigurations=[MetricsConfiguration(Id="default")],
             DependsOn=[log_ingester_permission],
             PublicAccessBlockConfiguration=PublicAccessBlockConfiguration(
                 BlockPublicAcls=True,
@@ -389,7 +387,6 @@ def create_template():
                     )
                 ]
             ),
-            MetricsConfigurations=[MetricsConfiguration(Id="default")],
             PublicAccessBlockConfiguration=PublicAccessBlockConfiguration(
                 BlockPublicAcls=True,
                 BlockPublicPolicy=True,
