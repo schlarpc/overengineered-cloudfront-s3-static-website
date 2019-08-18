@@ -164,6 +164,20 @@ def create_template():
         )
     )
 
+    enable_price_class_hack = template.add_parameter(
+        Parameter(
+            "EnablePriceClassHack",
+            Description="Cut your bill in half with this one weird trick.",
+            Type="String",
+            Default="false",
+            AllowedValues=["true", "false"],
+        )
+    )
+
+    using_price_class_hack = add_condition(
+        template, "UsingPriceClassHack", Equals(Ref(enable_price_class_hack), "true")
+    )
+
     using_acm_certificate = add_condition(
         template, "UsingAcmCertificate", Not(Equals(Ref(acm_certificate_arn), ""))
     )
@@ -651,6 +665,21 @@ def create_template():
         )
     )
 
+    price_class_distribution = template.add_resource(
+        Distribution(
+            "PriceClassDistribution",
+            DistributionConfig=DistributionConfig(
+                Comment="Dummy distribution used for price class hack",
+                Enabled=True,
+                Origins=[Origin(Id="default", DomainName=GetAtt(bucket, "DomainName"))],
+                IPV6Enabled=True,
+                ViewerCertificate=ViewerCertificate(CloudFrontDefaultCertificate=True),
+                PriceClass="PriceClass_All",
+            ),
+            Condition=using_price_class_hack,
+        )
+    )
+
     distribution = template.add_resource(
         Distribution(
             "ContentDistribution",
@@ -701,6 +730,9 @@ def create_template():
                     CloudFrontDefaultCertificate=If(using_certificate, NoValue, True),
                     MinimumProtocolVersion=Ref(tls_protocol_version),
                 ),
+                PriceClass=If(
+                    using_price_class_hack, "PriceClass_100", "PriceClass_All"
+                ),
             ),
             DependsOn=[log_ingester_policy],
         )
@@ -726,6 +758,17 @@ def create_template():
 
     template.add_output(
         Output("DistributionDomain", Value=GetAtt(distribution, "DomainName"))
+    )
+
+    template.add_output(
+        Output(
+            "DistributionDnsTarget",
+            Value=If(
+                using_price_class_hack,
+                GetAtt(price_class_distribution, "DomainName"),
+                GetAtt(distribution, "DomainName"),
+            ),
+        )
     )
 
     template.add_output(
