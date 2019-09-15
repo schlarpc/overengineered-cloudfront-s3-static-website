@@ -670,6 +670,11 @@ def create_template():
             "PriceClassDistribution",
             DistributionConfig=DistributionConfig(
                 Comment="Dummy distribution used for price class hack",
+                DefaultCacheBehavior=DefaultCacheBehavior(
+                    TargetOriginId="default",
+                    ViewerProtocolPolicy="allow-all",
+                    ForwardedValues=ForwardedValues(QueryString=False),
+                ),
                 Enabled=True,
                 Origins=[Origin(Id="default", DomainName=GetAtt(bucket, "DomainName"))],
                 IPV6Enabled=True,
