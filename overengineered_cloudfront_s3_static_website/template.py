@@ -99,6 +99,32 @@ def add_condition(template, name, condition):
     return name
 
 
+def create_log_group_template():
+    template = Template(Description="Child stack to maintain Lambda@Edge log groups")
+
+    log_group_name = template.add_parameter(Parameter("LogGroupName", Type="String"))
+    log_retention_days = template.add_parameter(
+        Parameter(
+            "RetentionInDays",
+            Type="Number",
+            Description="Days to keep Lambda@Edge logs. 0 means indefinite retention.",
+            AllowedValues=[0] + CLOUDWATCH_LOGS_RETENTION_OPTIONS,
+        )
+    )
+
+    retention_defined = add_condition(template, "RetentionDefined", Not(Equals(Ref(log_retention_days), 0)))
+
+    template.add_resource(
+        LogGroup(
+            "EdgeLambdaLogGroup",
+            LogGroupName=Ref(log_group_name),
+            RetentionInDays=If(retention_defined, Ref(log_retention_days), NoValue),
+        )
+    )
+
+    return template
+
+
 def create_template():
     template = Template(
         Description=(
