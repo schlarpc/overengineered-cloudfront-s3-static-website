@@ -73,6 +73,26 @@ import packmodule
 from . import certificate_validator, log_ingest
 
 
+CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
+    1,
+    3,
+    5,
+    7,
+    14,
+    30,
+    60,
+    90,
+    120,
+    150,
+    180,
+    365,
+    400,
+    545,
+    731,
+    1827,
+    3653,
+]
+
 
 
 def add_condition(template, name, condition):
@@ -129,27 +149,9 @@ def create_template():
     log_retention_days = template.add_parameter(
         Parameter(
             "LogRetentionDays",
-            Description="Days to keep CloudFront, S3, and Lambda logs.",
+            Description="Days to keep CloudFront, S3, and Lambda logs. 0 means indefinite retention.",
             Type="Number",
-            AllowedValues=[
-                1,
-                3,
-                5,
-                7,
-                14,
-                30,
-                60,
-                90,
-                120,
-                150,
-                180,
-                365,
-                400,
-                545,
-                731,
-                1827,
-                3653,
-            ],
+            AllowedValues=[0] + CLOUDWATCH_LOGS_RETENTION_OPTIONS,
             Default=365,
         )
     )
@@ -172,6 +174,8 @@ def create_template():
             AllowedValues=["true", "false"],
         )
     )
+
+    retention_defined = add_condition(template, "RetentionDefined", Not(Equals(Ref(log_retention_days), 0)))
 
     using_price_class_hack = add_condition(
         template, "UsingPriceClassHack", Equals(Ref(enable_price_class_hack), "true")
@@ -311,7 +315,7 @@ def create_template():
         LogGroup(
             "LogIngesterLogGroup",
             LogGroupName=Join("", ["/aws/lambda/", Ref(log_ingester)]),
-            RetentionInDays=Ref(log_retention_days),
+            RetentionInDays=If(retention_defined, Ref(log_retention_days), NoValue),
         )
     )
 
@@ -542,7 +546,7 @@ def create_template():
             LogGroupName=Join(
                 "", ["/aws/lambda/", Ref(certificate_validator_function)]
             ),
-            RetentionInDays=Ref(log_retention_days),
+            RetentionInDays=If(retention_defined, Ref(log_retention_days), NoValue),
             Condition=should_create_certificate,
         )
     )
@@ -746,7 +750,7 @@ def create_template():
         LogGroup(
             "DistributionLogGroup",
             LogGroupName=Join("", ["/aws/cloudfront/", Ref(distribution)]),
-            RetentionInDays=Ref(log_retention_days),
+            RetentionInDays=If(retention_defined, Ref(log_retention_days), NoValue),
         )
     )
 
@@ -754,7 +758,7 @@ def create_template():
         LogGroup(
             "BucketLogGroup",
             LogGroupName=Join("", ["/aws/s3/", Ref(bucket)]),
-            RetentionInDays=Ref(log_retention_days),
+            RetentionInDays=If(retention_defined, Ref(log_retention_days), NoValue),
         )
     )
 
