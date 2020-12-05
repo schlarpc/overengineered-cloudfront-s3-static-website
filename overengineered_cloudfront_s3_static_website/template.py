@@ -68,7 +68,6 @@ import inspect
 import json
 import textwrap
 
-import packmodule
 
 from . import certificate_validator, log_ingest
 
@@ -249,7 +248,7 @@ def create_template():
             "LogIngester",
             Runtime="python3.6",
             Handler="index.{}".format(log_ingest.handler.__name__),
-            Code=Code(ZipFile=packmodule.pack(inspect.getsource(log_ingest))),
+            Code=Code(ZipFile=inspect.getsource(log_ingest)),
             MemorySize=256,
             Timeout=300,
             Role=GetAtt(log_ingester_role, "Arn"),
@@ -521,7 +520,7 @@ def create_template():
             Runtime="python3.6",
             Handler="index.{}".format(certificate_validator.handler.__name__),
             Code=Code(
-                ZipFile=packmodule.pack(inspect.getsource(certificate_validator))
+                ZipFile=inspect.getsource(certificate_validator)
             ),
             MemorySize=256,
             Timeout=300,
