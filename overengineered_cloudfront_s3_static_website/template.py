@@ -1,4 +1,4 @@
-from awacs import logs, s3, sqs, sts
+from awacs import cloudformation, logs, s3, sns, sqs, sts
 from awacs.aws import Allow, PolicyDocument, Principal, Statement
 from troposphere import (
     AccountId,
@@ -18,6 +18,7 @@ from troposphere import (
     Ref,
     Region,
     Select,
+    StackName,
     Tags,
     Template,
 )
@@ -45,6 +46,14 @@ from troposphere.awslambda import (
     Version,
 )
 from troposphere.certificatemanager import Certificate
+from troposphere.cloudformation import (
+    StackSet,
+    OperationPreferences,
+    Parameter as StackSetParameter,
+    StackInstances,
+    WaitConditionHandle,
+    DeploymentTargets,
+)
 from troposphere.cloudfront import (
     CloudFrontOriginAccessIdentity,
     CloudFrontOriginAccessIdentityConfig,
@@ -110,7 +119,7 @@ def create_log_group_template():
     log_group_name = template.add_parameter(Parameter("LogGroupName", Type="String"))
     log_retention_days = template.add_parameter(
         Parameter(
-            "RetentionInDays",
+            "LogRetentionDays",
             Type="Number",
             Description="Days to keep Lambda@Edge logs. 0 means indefinite retention.",
             AllowedValues=[0] + CLOUDWATCH_LOGS_RETENTION_OPTIONS,
@@ -700,14 +709,9 @@ def create_template():
                     )
                 ],
             ),
-            # TODO scope down
-            ManagedPolicyArns=[
-                "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-            ],
         )
     )
 
-    # TODO known issue: no log group capture for replicated lambda
     edge_hook_function = template.add_resource(
         Function(
             "EdgeHookFunction",
@@ -742,6 +746,220 @@ def create_template():
         Version(
             "EdgeHookVersion" + edge_hook_function_hash,
             FunctionName=GetAtt(edge_hook_function, "Arn"),
+        )
+    )
+
+    replica_log_group_name = Join(
+        "/",
+        [
+            "/aws/lambda",
+            Join(
+                ".",
+                [
+                    FindInMap(partition_config, Partition, "PrimaryRegion"),
+                    Ref(edge_hook_function),
+                ],
+            ),
+        ],
+    )
+
+    edge_hook_role_policy = template.add_resource(
+        PolicyType(
+            "EdgeHookRolePolicy",
+            PolicyName="write-logs",
+            PolicyDocument=PolicyDocument(
+                Version="2012-10-17",
+                Statement=[
+                    Statement(
+                        Effect=Allow,
+                        Action=[logs.CreateLogStream, logs.PutLogEvents],
+                        Resource=[
+                            Join(
+                                ":",
+                                [
+                                    "arn",
+                                    Partition,
+                                    "logs",
+                                    "*",
+                                    AccountId,
+                                    "log-group",
+                                    replica_log_group_name,
+                                    "log-stream",
+                                    "*",
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            Roles=[Ref(edge_hook_role)],
+        )
+    )
+
+    stack_set_administration_role = template.add_resource(
+        Role(
+            "StackSetAdministrationRole",
+            AssumeRolePolicyDocument=PolicyDocument(
+                Version="2012-10-17",
+                Statement=[
+                    Statement(
+                        Effect=Allow,
+                        Principal=Principal("Service", "cloudformation.amazonaws.com"),
+                        Action=[sts.AssumeRole],
+                    ),
+                ],
+            ),
+        )
+    )
+
+    stack_set_execution_role = template.add_resource(
+        Role(
+            "StackSetExecutionRole",
+            AssumeRolePolicyDocument=PolicyDocument(
+                Version="2012-10-17",
+                Statement=[
+                    Statement(
+                        Effect=Allow,
+                        Principal=Principal(
+                            "AWS", GetAtt(stack_set_administration_role, "Arn")
+                        ),
+                        Action=[sts.AssumeRole],
+                    ),
+                ],
+            ),
+            Policies=[
+                PolicyProperty(
+                    PolicyName="create-stackset-instances",
+                    PolicyDocument=PolicyDocument(
+                        Version="2012-10-17",
+                        Statement=[
+                            Statement(
+                                Effect=Allow,
+                                Action=[
+                                    cloudformation.DescribeStacks,
+                                    logs.DescribeLogGroups,
+                                ],
+                                Resource=["*"],
+                            ),
+                            # stack instances communicate with the CFN service via SNS
+                            Statement(
+                                Effect=Allow,
+                                Action=[sns.Publish],
+                                NotResource=[
+                                    Join(
+                                        ":",
+                                        ["arn", Partition, "sns", "*", AccountId, "*"],
+                                    )
+                                ],
+                            ),
+                            Statement(
+                                Effect=Allow,
+                                Action=[
+                                    logs.CreateLogGroup,
+                                    logs.DeleteLogGroup,
+                                    logs.PutRetentionPolicy,
+                                    logs.DeleteRetentionPolicy,
+                                ],
+                                Resource=[
+                                    Join(
+                                        ":",
+                                        [
+                                            "arn",
+                                            Partition,
+                                            "logs",
+                                            "*",
+                                            AccountId,
+                                            "log-group",
+                                            replica_log_group_name,
+                                            "log-stream",
+                                            "",
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            Statement(
+                                Effect=Allow,
+                                Action=[
+                                    cloudformation.CreateStack,
+                                    cloudformation.DeleteStack,
+                                    cloudformation.UpdateStack,
+                                ],
+                                Resource=[
+                                    Join(
+                                        ":",
+                                        [
+                                            "arn",
+                                            Partition,
+                                            "cloudformation",
+                                            "*",
+                                            AccountId,
+                                            Join(
+                                                "/",
+                                                [
+                                                    "stack",
+                                                    Join(
+                                                        "-",
+                                                        ["StackSet", StackName, "*"],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    )
+                                ],
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        )
+    )
+
+    stack_set_administration_role_policy = template.add_resource(
+        PolicyType(
+            "StackSetAdministrationRolePolicy",
+            PolicyName="assume-execution-role",
+            PolicyDocument=PolicyDocument(
+                Version="2012-10-17",
+                Statement=[
+                    Statement(
+                        Effect=Allow,
+                        Action=[sts.AssumeRole],
+                        Resource=[GetAtt(stack_set_execution_role, "Arn")],
+                    ),
+                ],
+            ),
+            Roles=[Ref(stack_set_administration_role)],
+        )
+    )
+
+    edge_log_groups = template.add_resource(
+        StackSet(
+            "EdgeLambdaLogGroupStackSet",
+            AdministrationRoleARN=GetAtt(stack_set_administration_role, "Arn"),
+            ExecutionRoleName=Ref(stack_set_execution_role),
+            StackSetName=Join("-", [StackName, "EdgeLambdaLogGroup"]),
+            PermissionModel="SELF_MANAGED",
+            Description="Multi-region log groups for Lambda@Edge replicas",
+            Parameters=[
+                StackSetParameter(
+                    ParameterKey="LogGroupName", ParameterValue=replica_log_group_name,
+                ),
+                StackSetParameter(
+                    ParameterKey="LogRetentionDays",
+                    ParameterValue=Ref(log_retention_days),
+                ),
+            ],
+            OperationPreferences=OperationPreferences(
+                FailureToleranceCount=0, MaxConcurrentPercentage=100,
+            ),
+            StackInstancesGroup=[
+                StackInstances(
+                    DeploymentTargets=DeploymentTargets(Accounts=[AccountId]),
+                    Regions=FindInMap(partition_config, Partition, "DefaultRegions"),
+                )
+            ],
+            TemplateBody=create_log_group_template().to_json(indent=None),
+            DependsOn=[stack_set_administration_role_policy],
         )
     )
 
@@ -819,7 +1037,11 @@ def create_template():
                     using_price_class_hack, "PriceClass_100", "PriceClass_All"
                 ),
             ),
-            DependsOn=[log_ingester_policy, precondition_region_is_primary],
+            DependsOn=[
+                log_ingester_policy,
+                edge_log_groups,
+                precondition_region_is_primary,
+            ],
         )
     )
 
