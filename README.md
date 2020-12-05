@@ -62,5 +62,4 @@ The template parameters also include some extra settings:
     * This might be possible with a stack set, but you can't easily build a stack set from a single stack. It also wouldn't automatically update for new regions.
 * Stack deletion will fail on the Lambda@Edge function but will succeed after several hours (AWS limitation)
 * Directory URLs must end in "/" to get index.html retrieval behavior (e.g http://example.com/foo will not return the content at foo/index.html)
-* No KMS encryption for CloudWatch logs (unsupported in CloudFormation)
-    * This can be done with either a CloudFormation custom resource or an async workflow like the one used to validate ACM certificates.
+* No KMS encryption for CloudWatch logs
