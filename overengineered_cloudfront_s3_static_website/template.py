@@ -5,6 +5,7 @@ from troposphere import (
     And,
     Condition,
     Equals,
+    FindInMap,
     GetAtt,
     If,
     Join,
@@ -93,9 +94,13 @@ CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
 ]
 
 
-
 def add_condition(template, name, condition):
     template.add_condition(name, condition)
+    return name
+
+
+def add_mapping(template, name, mapping):
+    template.add_mapping(name, mapping)
     return name
 
 
@@ -131,6 +136,39 @@ def create_template():
             "Static website hosted with S3 and CloudFront. "
             "https://github.com/schlarpc/overengineered-cloudfront-s3-static-website"
         )
+    )
+
+    partition_config = add_mapping(
+        template,
+        "PartitionConfig",
+        {
+            # Lambda@Edge is currently only supported in the "aws" partition
+            "aws": {
+                # the region with the control plane for CloudFront, IAM, Route 53, etc
+                "PrimaryRegion": "us-east-1",
+                # assume that Lambda@Edge replicates to all default enabled regions, and that
+                # future regions will be opt-in. generated with AWS CLI:
+                # aws ec2 describe-regions --all-regions --query "Regions[?OptInStatus=='opt-in-not-required'].RegionName|sort(@)"
+                "DefaultRegions": [
+                    "ap-northeast-1",
+                    "ap-northeast-2",
+                    "ap-south-1",
+                    "ap-southeast-1",
+                    "ap-southeast-2",
+                    "ca-central-1",
+                    "eu-central-1",
+                    "eu-north-1",
+                    "eu-west-1",
+                    "eu-west-2",
+                    "eu-west-3",
+                    "sa-east-1",
+                    "us-east-1",
+                    "us-east-2",
+                    "us-west-1",
+                    "us-west-2",
+                ],
+            },
+        },
     )
 
     acm_certificate_arn = template.add_parameter(
@@ -228,6 +266,18 @@ def create_template():
 
     using_dns_names = add_condition(
         template, "UsingDnsNames", Not(Equals(Select(0, Ref(dns_names)), ""))
+    )
+
+    is_primary_region = "IsPrimaryRegion"
+    template.add_condition(
+        is_primary_region,
+        Equals(Region, FindInMap(partition_config, Partition, "PrimaryRegion")),
+    )
+
+    precondition_region_is_primary = template.add_resource(
+        WaitConditionHandle(
+            "PreconditionIsPrimaryRegionForPartition", Condition=is_primary_region,
+        )
     )
 
     log_ingester_dlq = template.add_resource(
@@ -767,7 +817,7 @@ def create_template():
                     using_price_class_hack, "PriceClass_100", "PriceClass_All"
                 ),
             ),
-            DependsOn=[log_ingester_policy],
+            DependsOn=[log_ingester_policy, precondition_region_is_primary],
         )
     )
 
