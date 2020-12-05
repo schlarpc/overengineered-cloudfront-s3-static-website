@@ -117,7 +117,9 @@ def create_log_group_template():
         )
     )
 
-    retention_defined = add_condition(template, "RetentionDefined", Not(Equals(Ref(log_retention_days), 0)))
+    retention_defined = add_condition(
+        template, "RetentionDefined", Not(Equals(Ref(log_retention_days), 0))
+    )
 
     template.add_resource(
         LogGroup(
@@ -238,7 +240,9 @@ def create_template():
         )
     )
 
-    retention_defined = add_condition(template, "RetentionDefined", Not(Equals(Ref(log_retention_days), 0)))
+    retention_defined = add_condition(
+        template, "RetentionDefined", Not(Equals(Ref(log_retention_days), 0))
+    )
 
     using_price_class_hack = add_condition(
         template, "UsingPriceClassHack", Equals(Ref(enable_price_class_hack), "true")
@@ -595,9 +599,7 @@ def create_template():
             "CertificateValidatorFunction",
             Runtime="python3.6",
             Handler="index.{}".format(certificate_validator.handler.__name__),
-            Code=Code(
-                ZipFile=inspect.getsource(certificate_validator)
-            ),
+            Code=Code(ZipFile=inspect.getsource(certificate_validator)),
             MemorySize=256,
             Timeout=300,
             Role=GetAtt(certificate_validator_role, "Arn"),
