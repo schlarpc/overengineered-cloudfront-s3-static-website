@@ -1,7 +1,6 @@
 from awacs import logs, s3, sqs, sts
 from awacs.aws import Allow, PolicyDocument, Principal, Statement
 from troposphere import (
-    AWS_PARTITION,
     AccountId,
     And,
     Condition,
@@ -14,6 +13,7 @@ from troposphere import (
     Or,
     Output,
     Parameter,
+    Partition,
     Ref,
     Region,
     Select,
@@ -73,7 +73,6 @@ import packmodule
 from . import certificate_validator, log_ingest
 
 
-Partition = Ref(AWS_PARTITION)
 
 
 def add_condition(template, name, condition):
