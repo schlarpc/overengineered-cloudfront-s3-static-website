@@ -711,7 +711,7 @@ def create_template():
     edge_hook_function = template.add_resource(
         Function(
             "EdgeHookFunction",
-            Runtime="nodejs8.10",
+            Runtime="nodejs12.x",
             Handler="index.handler",
             Code=Code(
                 ZipFile=textwrap.dedent(
