@@ -1038,6 +1038,7 @@ def create_template():
                 ),
             ),
             DependsOn=[
+                bucket_policy,
                 log_ingester_policy,
                 edge_log_groups,
                 precondition_region_is_primary,
