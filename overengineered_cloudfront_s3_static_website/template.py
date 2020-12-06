@@ -216,7 +216,7 @@ def create_template():
             "TlsProtocolVersion",
             Description="CloudFront TLS security policy; see https://amzn.to/2DR91Xq for details.",
             Type="String",
-            Default="TLSv1.1_2016",
+            Default="TLSv1.2_2019",
         )
     )
 
