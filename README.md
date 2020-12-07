@@ -61,3 +61,4 @@ The template parameters also include some extra settings:
 * Stack deletion will fail on the Lambda@Edge function but will succeed after several hours (AWS limitation)
 * Directory URLs must end in "/" to get index.html retrieval behavior (e.g http://example.com/foo will not return the content at foo/index.html)
 * No KMS encryption for CloudWatch logs
+* Access logs should be converted to JSON format for easier querying
