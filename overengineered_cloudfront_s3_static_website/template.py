@@ -3,6 +3,7 @@ from awacs.aws import Allow, PolicyDocument, Principal, Statement
 from troposphere import (
     AccountId,
     And,
+    AWSProperty,
     Condition,
     Equals,
     FindInMap,
@@ -101,6 +102,18 @@ CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
     1827,
     3653,
 ]
+
+
+class OwnershipControlsRule(AWSProperty):
+    props = {"ObjectOwnership": (str, False)}
+
+
+class OwnershipControls(AWSProperty):
+    props = {"Rules": ([OwnershipControlsRule], True)}
+
+
+class Bucket(Bucket):
+    props = {**Bucket.props, "OwnershipControls": (OwnershipControls, False)}
 
 
 def add_condition(template, name, condition):
@@ -364,6 +377,9 @@ def create_template():
     log_bucket = template.add_resource(
         Bucket(
             "LogBucket",
+            # S3 requires this ACL (regardless of bucket policy) or s3:PutBucketLogging fails.
+            # When the CloudFront distribution is created, it adds an additional bucket ACL.
+            # That ACL is not possible to model in CloudFormation.
             AccessControl="LogDeliveryWrite",
             LifecycleConfiguration=LifecycleConfiguration(
                 Rules=[
@@ -393,13 +409,16 @@ def create_template():
                     )
                 ]
             ),
-            DependsOn=[log_ingester_permission],
+            OwnershipControls=OwnershipControls(
+                Rules=[OwnershipControlsRule(ObjectOwnership="BucketOwnerPreferred")],
+            ),
             PublicAccessBlockConfiguration=PublicAccessBlockConfiguration(
                 BlockPublicAcls=True,
                 BlockPublicPolicy=True,
                 IgnorePublicAcls=True,
                 RestrictPublicBuckets=True,
             ),
+            DependsOn=[log_ingester_permission],
         )
     )
 
@@ -496,6 +515,9 @@ def create_template():
                     )
                 ]
             ),
+            OwnershipControls=OwnershipControls(
+                Rules=[OwnershipControlsRule(ObjectOwnership="BucketOwnerPreferred")],
+            ),
             PublicAccessBlockConfiguration=PublicAccessBlockConfiguration(
                 BlockPublicAcls=True,
                 BlockPublicPolicy=True,
@@ -529,12 +551,15 @@ def create_template():
                         ),
                         Action=[s3.GetObject],
                         Resource=[Join("", [GetAtt(bucket, "Arn"), "/*"])],
-                    )
+                    ),
                 ],
             ),
         )
     )
 
+    # Not strictly necessary, as ACLs should take care of this access. However, CloudFront docs
+    # state "In some circumstances [...] S3 resets permissions on the bucket to the default value",
+    # and this allows logging to work without any ACLs in place.
     log_bucket_policy = template.add_resource(
         BucketPolicy(
             "LogBucketPolicy",
@@ -543,18 +568,25 @@ def create_template():
                 Version="2012-10-17",
                 Statement=[
                     Statement(
-                        Sid="Allow CloudFront log delivery",
                         Effect=Allow,
-                        Principal=Principal(
-                            "CanonicalUser",
-                            [
-                                # this translates to 162777425019 when saved...
-                                "c4c1ede66af53448b93c283ce9448c4ba468c9432aa01d700d3878632f77d2d0"
-                            ],
-                        ),
+                        Principal=Principal("Service", "delivery.logs.amazonaws.com"),
                         Action=[s3.PutObject],
-                        Resource=[Join("", [GetAtt(log_bucket, "Arn"), "/*"])],
-                    )
+                        Resource=[
+                            Join("/", [GetAtt(log_bucket, "Arn"), "cloudfront", "*"])
+                        ],
+                    ),
+                    Statement(
+                        Effect=Allow,
+                        Principal=Principal("Service", "delivery.logs.amazonaws.com"),
+                        Action=[s3.ListBucket],
+                        Resource=[Join("/", [GetAtt(log_bucket, "Arn")])],
+                    ),
+                    Statement(
+                        Effect=Allow,
+                        Principal=Principal("Service", "s3.amazonaws.com"),
+                        Action=[s3.PutObject],
+                        Resource=[Join("/", [GetAtt(log_bucket, "Arn"), "s3", "*"])],
+                    ),
                 ],
             ),
         )
