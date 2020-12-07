@@ -153,7 +153,6 @@ def create_template():
         template,
         "PartitionConfig",
         {
-            # Lambda@Edge is currently only supported in the "aws" partition
             "aws": {
                 # the region with the control plane for CloudFront, IAM, Route 53, etc
                 "PrimaryRegion": "us-east-1",
@@ -178,6 +177,11 @@ def create_template():
                     "us-west-1",
                     "us-west-2",
                 ],
+            },
+            # this doesn't actually work, because Lambda@Edge isn't supported in aws-cn
+            "aws-cn": {
+                "PrimaryRegion": "cn-north-1",
+                "DefaultRegions": ["cn-north-1", "cn-northwest-1"],
             },
         },
     )
