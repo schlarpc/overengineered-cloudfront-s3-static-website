@@ -353,7 +353,7 @@ def create_template():
     log_ingester = template.add_resource(
         Function(
             "LogIngester",
-            Runtime="python3.6",
+            Runtime=PYTHON_RUNTIME,
             Handler="index.{}".format(log_ingest.handler.__name__),
             Code=Code(ZipFile=inspect.getsource(log_ingest)),
             MemorySize=256,
@@ -643,7 +643,7 @@ def create_template():
     certificate_validator_function = template.add_resource(
         Function(
             "CertificateValidatorFunction",
-            Runtime="python3.6",
+            Runtime=PYTHON_RUNTIME,
             Handler="index.{}".format(certificate_validator.handler.__name__),
             Code=Code(ZipFile=inspect.getsource(certificate_validator)),
             MemorySize=256,
