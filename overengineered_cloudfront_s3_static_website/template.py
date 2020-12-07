@@ -80,7 +80,7 @@ import json
 import textwrap
 
 
-from . import certificate_validator, log_ingest
+from . import certificate_validator, edge_hook, log_ingest
 
 
 CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
@@ -102,6 +102,7 @@ CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
     1827,
     3653,
 ]
+PYTHON_RUNTIME = "python3.8"
 
 
 class OwnershipControlsRule(AWSProperty):
@@ -751,20 +752,9 @@ def create_template():
     edge_hook_function = template.add_resource(
         Function(
             "EdgeHookFunction",
-            Runtime="nodejs12.x",
+            Runtime=PYTHON_RUNTIME,
             Handler="index.handler",
-            Code=Code(
-                ZipFile=textwrap.dedent(
-                    """
-                    'use strict';
-                    exports.handler = (event, context, callback) => {
-                        var request = event.Records[0].cf.request;
-                        request.uri = request.uri.replace(/\/$/, '\/index.html');
-                        return callback(null, request);
-                    };
-                    """
-                )
-            ),
+            Code=Code(ZipFile=inspect.getsource(edge_hook)),
             MemorySize=128,
             Timeout=3,
             Role=GetAtt(edge_hook_role, "Arn"),
