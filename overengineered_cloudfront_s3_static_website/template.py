@@ -79,8 +79,9 @@ import inspect
 import json
 import textwrap
 
+import packmodule
 
-from . import certificate_validator, edge_hook, log_ingest
+from . import certificate_validator, edge_hook, edge_hook_deluxe, log_ingest
 
 
 CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
@@ -554,6 +555,15 @@ def create_template():
                         Action=[s3.GetObject],
                         Resource=[Join("", [GetAtt(bucket, "Arn"), "/*"])],
                     ),
+                    Statement(
+                        Effect=Allow,
+                        Principal=Principal(
+                            "CanonicalUser",
+                            GetAtt(origin_access_identity, "S3CanonicalUserId"),
+                        ),
+                        Action=[s3.ListBucket],
+                        Resource=[GetAtt(bucket, "Arn")],
+                    ),
                 ],
             ),
         )
@@ -755,7 +765,7 @@ def create_template():
             "EdgeHookFunction",
             Runtime=PYTHON_RUNTIME,
             Handler="index.handler",
-            Code=Code(ZipFile=inspect.getsource(edge_hook)),
+            Code=Code(ZipFile=packmodule.pack(inspect.getsource(edge_hook_deluxe))),
             MemorySize=128,
             Timeout=3,
             Role=GetAtt(edge_hook_role, "Arn"),
@@ -815,6 +825,13 @@ def create_template():
                                     "*",
                                 ],
                             ),
+                        ],
+                    ),
+                    Statement(
+                        Effect=Allow,
+                        Action=[s3.GetBucketWebsite],
+                        Resource=[
+                            GetAtt(bucket, "Arn"),
                         ],
                     ),
                 ],
@@ -1038,14 +1055,18 @@ def create_template():
                 DefaultCacheBehavior=DefaultCacheBehavior(
                     TargetOriginId="default",
                     Compress=True,
-                    ForwardedValues=ForwardedValues(QueryString=False),
+                    ForwardedValues=ForwardedValues(QueryString=True),
                     ViewerProtocolPolicy="redirect-to-https",
                     DefaultTTL=Ref(default_ttl_seconds),
                     LambdaFunctionAssociations=[
                         LambdaFunctionAssociation(
                             EventType="origin-request",
                             LambdaFunctionARN=Ref(edge_hook_version),
-                        )
+                        ),
+                        LambdaFunctionAssociation(
+                            EventType="origin-response",
+                            LambdaFunctionARN=Ref(edge_hook_version),
+                        ),
                     ],
                 ),
                 HttpVersion="http2",
