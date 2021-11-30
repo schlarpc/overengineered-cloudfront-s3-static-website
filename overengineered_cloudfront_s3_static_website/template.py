@@ -117,6 +117,13 @@ class Bucket(Bucket):
     props = {**Bucket.props, "OwnershipControls": (OwnershipControls, False)}
 
 
+class NotificationConfiguration(NotificationConfiguration):
+    props = {
+        **NotificationConfiguration.props,
+        "EventBridgeConfiguration": (dict, False),
+    }
+
+
 def add_condition(template, name, condition):
     template.add_condition(name, condition)
     return name
@@ -503,6 +510,9 @@ def create_template():
                         Status="Enabled",
                     )
                 ]
+            ),
+            NotificationConfiguration=NotificationConfiguration(
+                EventBridgeConfiguration={},
             ),
             LoggingConfiguration=LoggingConfiguration(
                 DestinationBucketName=Ref(log_bucket), LogFilePrefix="s3/"
