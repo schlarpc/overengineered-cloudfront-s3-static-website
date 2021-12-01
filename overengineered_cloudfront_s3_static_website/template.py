@@ -420,6 +420,7 @@ def create_template():
                 ]
             ),
             OwnershipControls=OwnershipControls(
+                # BucketOwnerEnforced is not supported for CloudFront logs, see https://go.aws/2ZJlydg
                 Rules=[OwnershipControlsRule(ObjectOwnership="BucketOwnerPreferred")],
             ),
             PublicAccessBlockConfiguration=PublicAccessBlockConfiguration(
@@ -529,7 +530,7 @@ def create_template():
                 ]
             ),
             OwnershipControls=OwnershipControls(
-                Rules=[OwnershipControlsRule(ObjectOwnership="BucketOwnerPreferred")],
+                Rules=[OwnershipControlsRule(ObjectOwnership="BucketOwnerEnforced")],
             ),
             PublicAccessBlockConfiguration=PublicAccessBlockConfiguration(
                 BlockPublicAcls=True,
