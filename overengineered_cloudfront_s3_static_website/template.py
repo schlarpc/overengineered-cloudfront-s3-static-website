@@ -495,16 +495,15 @@ def create_template():
             "ContentBucket",
             LifecycleConfiguration=LifecycleConfiguration(
                 Rules=[
-                    # not supported by CFN yet:
-                    # LifecycleRule(
-                    # Transitions=[
-                    # LifecycleRuleTransition(
-                    # StorageClass='INTELLIGENT_TIERING',
-                    # TransitionInDays=1,
-                    # ),
-                    # ],
-                    # Status="Enabled",
-                    # ),
+                    LifecycleRule(
+                        Transitions=[
+                            LifecycleRuleTransition(
+                                StorageClass="INTELLIGENT_TIERING",
+                                TransitionInDays=1,
+                            ),
+                        ],
+                        Status="Enabled",
+                    ),
                     LifecycleRule(
                         AbortIncompleteMultipartUpload=AbortIncompleteMultipartUpload(
                             DaysAfterInitiation=7
