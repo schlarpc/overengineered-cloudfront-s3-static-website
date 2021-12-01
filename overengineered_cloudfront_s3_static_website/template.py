@@ -315,7 +315,8 @@ def create_template():
 
     precondition_region_is_primary = template.add_resource(
         WaitConditionHandle(
-            "PreconditionIsPrimaryRegionForPartition", Condition=is_primary_region,
+            "PreconditionIsPrimaryRegionForPartition",
+            Condition=is_primary_region,
         )
     )
 
@@ -508,7 +509,7 @@ def create_template():
                             DaysAfterInitiation=7
                         ),
                         Status="Enabled",
-                    )
+                    ),
                 ]
             ),
             NotificationConfiguration=NotificationConfiguration(
@@ -979,7 +980,8 @@ def create_template():
             Description="Multi-region log groups for Lambda@Edge replicas",
             Parameters=[
                 StackSetParameter(
-                    ParameterKey="LogGroupName", ParameterValue=replica_log_group_name,
+                    ParameterKey="LogGroupName",
+                    ParameterValue=replica_log_group_name,
                 ),
                 StackSetParameter(
                     ParameterKey="LogRetentionDays",
@@ -987,7 +989,8 @@ def create_template():
                 ),
             ],
             OperationPreferences=OperationPreferences(
-                FailureToleranceCount=0, MaxConcurrentPercentage=100,
+                FailureToleranceCount=0,
+                MaxConcurrentPercentage=100,
             ),
             StackInstancesGroup=[
                 StackInstances(
