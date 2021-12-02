@@ -1061,7 +1061,6 @@ def create_template():
                     TargetOriginId="default",
                     ViewerProtocolPolicy="allow-all",
                     CachePolicyId=Ref(cache_policy),
-                    ForwardedValues=ForwardedValues(QueryString=False),
                 ),
                 Enabled=True,
                 Origins=[Origin(Id="default", DomainName=GetAtt(bucket, "DomainName"))],
