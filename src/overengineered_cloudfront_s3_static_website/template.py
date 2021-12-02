@@ -1,18 +1,9 @@
 import datetime
-import hashlib
 import inspect
-import json
+import pathlib
 
-from awacs import cloudformation, logs, s3, sns, sqs, sts
-from awacs.aws import (
-    Allow,
-    Bool,
-    Condition as IAMCondition,
-    Deny,
-    PolicyDocument,
-    Principal,
-    Statement,
-)
+from awacs import logs, s3, sqs, sts
+from awacs.aws import Allow, PolicyDocument, Principal, Statement
 from troposphere import (
     AccountId,
     And,
@@ -41,17 +32,9 @@ from troposphere.awslambda import (
     Environment,
     Function,
     Permission,
-    Version,
 )
 from troposphere.certificatemanager import Certificate
-from troposphere.cloudformation import (
-    DeploymentTargets,
-    OperationPreferences,
-    Parameter as StackSetParameter,
-    StackInstances,
-    StackSet,
-    WaitConditionHandle,
-)
+from troposphere.cloudformation import WaitConditionHandle
 from troposphere.cloudfront import (
     CacheCookiesConfig,
     CacheHeadersConfig,
@@ -63,8 +46,9 @@ from troposphere.cloudfront import (
     DefaultCacheBehavior,
     Distribution,
     DistributionConfig,
-    ForwardedValues,
-    LambdaFunctionAssociation,
+    Function as CloudFrontFunction,
+    FunctionAssociation,
+    FunctionConfig,
     Logging,
     Origin,
     OriginRequestCookiesConfig,
@@ -98,7 +82,7 @@ from troposphere.s3 import (
 )
 from troposphere.sqs import Queue
 
-from . import certificate_validator, edge_hook, log_ingest
+from . import certificate_validator, log_ingest
 
 CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
     1,
@@ -139,32 +123,9 @@ def add_mapping(template, name, mapping):
     return name
 
 
-def create_log_group_template():
-    template = Template(Description="Child stack to maintain Lambda@Edge log groups")
-
-    log_group_name = template.add_parameter(Parameter("LogGroupName", Type="String"))
-    log_retention_days = template.add_parameter(
-        Parameter(
-            "LogRetentionDays",
-            Type="Number",
-            Description="Days to keep Lambda@Edge logs. 0 means indefinite retention.",
-            AllowedValues=[0] + CLOUDWATCH_LOGS_RETENTION_OPTIONS,
-        )
-    )
-
-    retention_defined = add_condition(
-        template, "RetentionDefined", Not(Equals(Ref(log_retention_days), 0))
-    )
-
-    template.add_resource(
-        LogGroup(
-            "EdgeLambdaLogGroup",
-            LogGroupName=Ref(log_group_name),
-            RetentionInDays=If(retention_defined, Ref(log_retention_days), NoValue),
-        )
-    )
-
-    return template
+def read_static_file(filename, mode="r"):
+    with (pathlib.Path(__file__).parent / "static" / filename).open(mode) as f:
+        return f.read()
 
 
 def create_template():
@@ -182,33 +143,10 @@ def create_template():
             "aws": {
                 # the region with the control plane for CloudFront, IAM, Route 53, etc
                 "PrimaryRegion": "us-east-1",
-                # assume that Lambda@Edge replicates to all default enabled regions, and that
-                # future regions will be opt-in. generated with AWS CLI:
-                # aws ec2 describe-regions --all-regions --query "Regions[?OptInStatus=='opt-in-not-required'].RegionName|sort(@)"
-                "DefaultRegions": [
-                    "ap-northeast-1",
-                    "ap-northeast-2",
-                    "ap-northeast-3",
-                    "ap-south-1",
-                    "ap-southeast-1",
-                    "ap-southeast-2",
-                    "ca-central-1",
-                    "eu-central-1",
-                    "eu-north-1",
-                    "eu-west-1",
-                    "eu-west-2",
-                    "eu-west-3",
-                    "sa-east-1",
-                    "us-east-1",
-                    "us-east-2",
-                    "us-west-1",
-                    "us-west-2",
-                ],
             },
-            # this doesn't actually work, because Lambda@Edge isn't supported in aws-cn
+            # no idea if CloudFront Functions work in China
             "aws-cn": {
                 "PrimaryRegion": "cn-north-1",
-                "DefaultRegions": ["cn-north-1", "cn-northwest-1"],
             },
         },
     )
@@ -748,267 +686,6 @@ def create_template():
         )
     )
 
-    edge_hook_role = template.add_resource(
-        Role(
-            "EdgeHookRole",
-            AssumeRolePolicyDocument=PolicyDocument(
-                Version="2012-10-17",
-                Statement=[
-                    Statement(
-                        Effect="Allow",
-                        Principal=Principal(
-                            "Service",
-                            ["lambda.amazonaws.com", "edgelambda.amazonaws.com"],
-                        ),
-                        Action=[sts.AssumeRole],
-                    )
-                ],
-            ),
-        )
-    )
-
-    edge_hook_function = template.add_resource(
-        Function(
-            "EdgeHookFunction",
-            Runtime=PYTHON_RUNTIME,
-            Handler="index.handler",
-            Code=Code(ZipFile=inspect.getsource(edge_hook)),
-            MemorySize=128,
-            Timeout=3,
-            Role=GetAtt(edge_hook_role, "Arn"),
-        )
-    )
-    edge_hook_function_hash = (
-        hashlib.sha256(
-            json.dumps(edge_hook_function.to_dict(), sort_keys=True).encode("utf-8")
-        )
-        .hexdigest()[:10]
-        .upper()
-    )
-
-    edge_hook_version = template.add_resource(
-        Version(
-            "EdgeHookVersion" + edge_hook_function_hash,
-            FunctionName=GetAtt(edge_hook_function, "Arn"),
-        )
-    )
-
-    replica_log_group_name = Join(
-        "/",
-        [
-            "/aws/lambda",
-            Join(
-                ".",
-                [
-                    FindInMap(partition_config, Partition, "PrimaryRegion"),
-                    Ref(edge_hook_function),
-                ],
-            ),
-        ],
-    )
-
-    edge_hook_role_policy = template.add_resource(
-        PolicyType(
-            "EdgeHookRolePolicy",
-            PolicyName="write-logs",
-            PolicyDocument=PolicyDocument(
-                Version="2012-10-17",
-                Statement=[
-                    Statement(
-                        Effect=Allow,
-                        Action=[logs.CreateLogStream, logs.PutLogEvents],
-                        Resource=[
-                            Join(
-                                ":",
-                                [
-                                    "arn",
-                                    Partition,
-                                    "logs",
-                                    "*",
-                                    AccountId,
-                                    "log-group",
-                                    replica_log_group_name,
-                                    "log-stream",
-                                    "*",
-                                ],
-                            ),
-                        ],
-                    ),
-                ],
-            ),
-            Roles=[Ref(edge_hook_role)],
-        )
-    )
-
-    stack_set_administration_role = template.add_resource(
-        Role(
-            "StackSetAdministrationRole",
-            AssumeRolePolicyDocument=PolicyDocument(
-                Version="2012-10-17",
-                Statement=[
-                    Statement(
-                        Effect=Allow,
-                        Principal=Principal("Service", "cloudformation.amazonaws.com"),
-                        Action=[sts.AssumeRole],
-                    ),
-                ],
-            ),
-        )
-    )
-
-    stack_set_execution_role = template.add_resource(
-        Role(
-            "StackSetExecutionRole",
-            AssumeRolePolicyDocument=PolicyDocument(
-                Version="2012-10-17",
-                Statement=[
-                    Statement(
-                        Effect=Allow,
-                        Principal=Principal(
-                            "AWS", GetAtt(stack_set_administration_role, "Arn")
-                        ),
-                        Action=[sts.AssumeRole],
-                    ),
-                ],
-            ),
-            Policies=[
-                PolicyProperty(
-                    PolicyName="create-stackset-instances",
-                    PolicyDocument=PolicyDocument(
-                        Version="2012-10-17",
-                        Statement=[
-                            Statement(
-                                Effect=Allow,
-                                Action=[
-                                    cloudformation.DescribeStacks,
-                                    logs.DescribeLogGroups,
-                                ],
-                                Resource=["*"],
-                            ),
-                            # stack instances communicate with the CFN service via SNS
-                            Statement(
-                                Effect=Allow,
-                                Action=[sns.Publish],
-                                NotResource=[
-                                    Join(
-                                        ":",
-                                        ["arn", Partition, "sns", "*", AccountId, "*"],
-                                    )
-                                ],
-                            ),
-                            Statement(
-                                Effect=Allow,
-                                Action=[
-                                    logs.CreateLogGroup,
-                                    logs.DeleteLogGroup,
-                                    logs.PutRetentionPolicy,
-                                    logs.DeleteRetentionPolicy,
-                                ],
-                                Resource=[
-                                    Join(
-                                        ":",
-                                        [
-                                            "arn",
-                                            Partition,
-                                            "logs",
-                                            "*",
-                                            AccountId,
-                                            "log-group",
-                                            replica_log_group_name,
-                                            "log-stream",
-                                            "",
-                                        ],
-                                    ),
-                                ],
-                            ),
-                            Statement(
-                                Effect=Allow,
-                                Action=[
-                                    cloudformation.CreateStack,
-                                    cloudformation.DeleteStack,
-                                    cloudformation.UpdateStack,
-                                ],
-                                Resource=[
-                                    Join(
-                                        ":",
-                                        [
-                                            "arn",
-                                            Partition,
-                                            "cloudformation",
-                                            "*",
-                                            AccountId,
-                                            Join(
-                                                "/",
-                                                [
-                                                    "stack",
-                                                    Join(
-                                                        "-",
-                                                        ["StackSet", StackName, "*"],
-                                                    ),
-                                                ],
-                                            ),
-                                        ],
-                                    )
-                                ],
-                            ),
-                        ],
-                    ),
-                ),
-            ],
-        )
-    )
-
-    stack_set_administration_role_policy = template.add_resource(
-        PolicyType(
-            "StackSetAdministrationRolePolicy",
-            PolicyName="assume-execution-role",
-            PolicyDocument=PolicyDocument(
-                Version="2012-10-17",
-                Statement=[
-                    Statement(
-                        Effect=Allow,
-                        Action=[sts.AssumeRole],
-                        Resource=[GetAtt(stack_set_execution_role, "Arn")],
-                    ),
-                ],
-            ),
-            Roles=[Ref(stack_set_administration_role)],
-        )
-    )
-
-    edge_log_groups = template.add_resource(
-        StackSet(
-            "EdgeLambdaLogGroupStackSet",
-            AdministrationRoleARN=GetAtt(stack_set_administration_role, "Arn"),
-            ExecutionRoleName=Ref(stack_set_execution_role),
-            StackSetName=Join("-", [StackName, "EdgeLambdaLogGroup"]),
-            PermissionModel="SELF_MANAGED",
-            Description="Multi-region log groups for Lambda@Edge replicas",
-            Parameters=[
-                StackSetParameter(
-                    ParameterKey="LogGroupName",
-                    ParameterValue=replica_log_group_name,
-                ),
-                StackSetParameter(
-                    ParameterKey="LogRetentionDays",
-                    ParameterValue=Ref(log_retention_days),
-                ),
-            ],
-            OperationPreferences=OperationPreferences(
-                FailureToleranceCount=0,
-                MaxConcurrentPercentage=100,
-            ),
-            StackInstancesGroup=[
-                StackInstances(
-                    DeploymentTargets=DeploymentTargets(Accounts=[AccountId]),
-                    Regions=FindInMap(partition_config, Partition, "DefaultRegions"),
-                )
-            ],
-            TemplateBody=create_log_group_template().to_json(indent=None),
-            DependsOn=[stack_set_administration_role_policy],
-        )
-    )
-
     cache_policy = template.add_resource(
         CachePolicy(
             "CachePolicy",
@@ -1048,6 +725,31 @@ def create_template():
                 QueryStringsConfig=OriginRequestQueryStringsConfig(
                     QueryStringBehavior="none",
                 ),
+            ),
+        )
+    )
+
+    viewer_request_function_name = Join("-", [StackName, "ViewerRequestFunction"])
+
+    template.add_resource(
+        LogGroup(
+            "ViewerRequestFunctionLogGroup",
+            LogGroupName=Join(
+                "", ["/aws/cloudfront/function/", viewer_request_function_name]
+            ),
+            RetentionInDays=If(retention_defined, Ref(log_retention_days), NoValue),
+        )
+    )
+
+    viewer_request_function = template.add_resource(
+        CloudFrontFunction(
+            "ViewerRequestFunction",
+            Name=viewer_request_function_name,
+            FunctionCode=read_static_file("viewer_request.js"),
+            AutoPublish=True,
+            FunctionConfig=FunctionConfig(
+                Comment=viewer_request_function_name,
+                Runtime="cloudfront-js-1.0",
             ),
         )
     )
@@ -1103,11 +805,11 @@ def create_template():
                     OriginRequestPolicyId=Ref(origin_request_policy),
                     Compress=True,
                     ViewerProtocolPolicy="redirect-to-https",
-                    LambdaFunctionAssociations=[
-                        LambdaFunctionAssociation(
-                            EventType="origin-request",
-                            LambdaFunctionARN=Ref(edge_hook_version),
-                        )
+                    FunctionAssociations=[
+                        FunctionAssociation(
+                            EventType="viewer-request",
+                            FunctionARN=GetAtt(viewer_request_function, "FunctionARN"),
+                        ),
                     ],
                 ),
                 HttpVersion="http2",
@@ -1130,8 +832,6 @@ def create_template():
                 bucket_policy,
                 log_bucket_policy,
                 log_ingester_policy,
-                edge_hook_role_policy,
-                edge_log_groups,
                 precondition_region_is_primary,
             ],
         )
