@@ -1,17 +1,29 @@
+import datetime
+import hashlib
+import inspect
+import json
+
 from awacs import cloudformation, logs, s3, sns, sqs, sts
-from awacs.aws import Allow, PolicyDocument, Principal, Statement
+from awacs.aws import (
+    Allow,
+    Bool,
+    Condition as IAMCondition,
+    Deny,
+    PolicyDocument,
+    Principal,
+    Statement,
+)
 from troposphere import (
     AccountId,
     And,
-    AWSProperty,
     Condition,
     Equals,
     FindInMap,
     GetAtt,
     If,
     Join,
-    NoValue,
     Not,
+    NoValue,
     Or,
     Output,
     Parameter,
@@ -23,6 +35,50 @@ from troposphere import (
     Tags,
     Template,
 )
+from troposphere.awslambda import (
+    Code,
+    DeadLetterConfig,
+    Environment,
+    Function,
+    Permission,
+    Version,
+)
+from troposphere.certificatemanager import Certificate
+from troposphere.cloudformation import (
+    DeploymentTargets,
+    OperationPreferences,
+    Parameter as StackSetParameter,
+    StackInstances,
+    StackSet,
+    WaitConditionHandle,
+)
+from troposphere.cloudfront import (
+    CacheCookiesConfig,
+    CacheHeadersConfig,
+    CachePolicy,
+    CachePolicyConfig,
+    CacheQueryStringsConfig,
+    CloudFrontOriginAccessIdentity,
+    CloudFrontOriginAccessIdentityConfig,
+    DefaultCacheBehavior,
+    Distribution,
+    DistributionConfig,
+    ForwardedValues,
+    LambdaFunctionAssociation,
+    Logging,
+    Origin,
+    OriginRequestCookiesConfig,
+    OriginRequestHeadersConfig,
+    OriginRequestPolicy,
+    OriginRequestPolicyConfig,
+    OriginRequestQueryStringsConfig,
+    ParametersInCacheKeyAndForwardedToOrigin,
+    S3OriginConfig,
+    ViewerCertificate,
+)
+from troposphere.events import Rule, Target
+from troposphere.iam import PolicyProperty, PolicyType, Role
+from troposphere.logs import LogGroup
 from troposphere.s3 import (
     AbortIncompleteMultipartUpload,
     Bucket,
@@ -34,54 +90,15 @@ from troposphere.s3 import (
     LifecycleRuleTransition,
     LoggingConfiguration,
     NotificationConfiguration,
+    OwnershipControls,
+    OwnershipControlsRule,
     PublicAccessBlockConfiguration,
     ServerSideEncryptionByDefault,
     ServerSideEncryptionRule,
 )
-from troposphere.awslambda import (
-    Code,
-    DeadLetterConfig,
-    Environment,
-    Function,
-    Permission,
-    Version,
-)
-from troposphere.certificatemanager import Certificate
-from troposphere.cloudformation import (
-    StackSet,
-    OperationPreferences,
-    Parameter as StackSetParameter,
-    StackInstances,
-    WaitConditionHandle,
-    DeploymentTargets,
-)
-from troposphere.cloudfront import (
-    CloudFrontOriginAccessIdentity,
-    CloudFrontOriginAccessIdentityConfig,
-    DefaultCacheBehavior,
-    Distribution,
-    DistributionConfig,
-    ForwardedValues,
-    LambdaFunctionAssociation,
-    Logging,
-    Origin,
-    S3OriginConfig,
-    ViewerCertificate,
-)
-from troposphere.events import Rule, Target
-from troposphere.iam import PolicyProperty, PolicyType, Role
-from troposphere.logs import LogGroup
 from troposphere.sqs import Queue
 
-import datetime
-import hashlib
-import inspect
-import json
-import textwrap
-
-
 from . import certificate_validator, edge_hook, log_ingest
-
 
 CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
     1,
@@ -103,18 +120,6 @@ CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
     3653,
 ]
 PYTHON_RUNTIME = "python3.8"
-
-
-class OwnershipControlsRule(AWSProperty):
-    props = {"ObjectOwnership": (str, False)}
-
-
-class OwnershipControls(AWSProperty):
-    props = {"Rules": ([OwnershipControlsRule], True)}
-
-
-class Bucket(Bucket):
-    props = {**Bucket.props, "OwnershipControls": (OwnershipControls, False)}
 
 
 class NotificationConfiguration(NotificationConfiguration):
@@ -433,6 +438,41 @@ def create_template():
         )
     )
 
+    # Not strictly necessary, as ACLs should take care of this access. However, CloudFront docs
+    # state "In some circumstances [...] S3 resets permissions on the bucket to the default value",
+    # and this allows logging to work without any ACLs in place.
+    log_bucket_policy = template.add_resource(
+        BucketPolicy(
+            "LogBucketPolicy",
+            Bucket=Ref(log_bucket),
+            PolicyDocument=PolicyDocument(
+                Version="2012-10-17",
+                Statement=[
+                    Statement(
+                        Effect=Allow,
+                        Principal=Principal("Service", "delivery.logs.amazonaws.com"),
+                        Action=[s3.PutObject],
+                        Resource=[
+                            Join("/", [GetAtt(log_bucket, "Arn"), "cloudfront", "*"])
+                        ],
+                    ),
+                    Statement(
+                        Effect=Allow,
+                        Principal=Principal("Service", "delivery.logs.amazonaws.com"),
+                        Action=[s3.ListBucket],
+                        Resource=[Join("/", [GetAtt(log_bucket, "Arn")])],
+                    ),
+                    Statement(
+                        Effect=Allow,
+                        Principal=Principal("Service", "s3.amazonaws.com"),
+                        Action=[s3.PutObject],
+                        Resource=[Join("/", [GetAtt(log_bucket, "Arn"), "s3", "*"])],
+                    ),
+                ],
+            ),
+        )
+    )
+
     log_ingester_log_group = template.add_resource(
         LogGroup(
             "LogIngesterLogGroup",
@@ -537,6 +577,7 @@ def create_template():
                 IgnorePublicAcls=True,
                 RestrictPublicBuckets=True,
             ),
+            DependsOn=[log_bucket_policy],
         )
     )
 
@@ -564,41 +605,6 @@ def create_template():
                         ),
                         Action=[s3.GetObject],
                         Resource=[Join("", [GetAtt(bucket, "Arn"), "/*"])],
-                    ),
-                ],
-            ),
-        )
-    )
-
-    # Not strictly necessary, as ACLs should take care of this access. However, CloudFront docs
-    # state "In some circumstances [...] S3 resets permissions on the bucket to the default value",
-    # and this allows logging to work without any ACLs in place.
-    log_bucket_policy = template.add_resource(
-        BucketPolicy(
-            "LogBucketPolicy",
-            Bucket=Ref(log_bucket),
-            PolicyDocument=PolicyDocument(
-                Version="2012-10-17",
-                Statement=[
-                    Statement(
-                        Effect=Allow,
-                        Principal=Principal("Service", "delivery.logs.amazonaws.com"),
-                        Action=[s3.PutObject],
-                        Resource=[
-                            Join("/", [GetAtt(log_bucket, "Arn"), "cloudfront", "*"])
-                        ],
-                    ),
-                    Statement(
-                        Effect=Allow,
-                        Principal=Principal("Service", "delivery.logs.amazonaws.com"),
-                        Action=[s3.ListBucket],
-                        Resource=[Join("/", [GetAtt(log_bucket, "Arn")])],
-                    ),
-                    Statement(
-                        Effect=Allow,
-                        Principal=Principal("Service", "s3.amazonaws.com"),
-                        Action=[s3.PutObject],
-                        Resource=[Join("/", [GetAtt(log_bucket, "Arn"), "s3", "*"])],
                     ),
                 ],
             ),
@@ -1003,6 +1009,49 @@ def create_template():
         )
     )
 
+    cache_policy = template.add_resource(
+        CachePolicy(
+            "CachePolicy",
+            CachePolicyConfig=CachePolicyConfig(
+                Name=Join("-", [StackName, "CachePolicy"]),
+                DefaultTTL=Ref(default_ttl_seconds),
+                MinTTL=0,
+                MaxTTL=int(datetime.timedelta(days=365).total_seconds()),
+                ParametersInCacheKeyAndForwardedToOrigin=ParametersInCacheKeyAndForwardedToOrigin(
+                    EnableAcceptEncodingBrotli=True,
+                    EnableAcceptEncodingGzip=True,
+                    CookiesConfig=CacheCookiesConfig(
+                        CookieBehavior="none",
+                    ),
+                    HeadersConfig=CacheHeadersConfig(
+                        HeaderBehavior="none",
+                    ),
+                    QueryStringsConfig=CacheQueryStringsConfig(
+                        QueryStringBehavior="none",
+                    ),
+                ),
+            ),
+        )
+    )
+
+    origin_request_policy = template.add_resource(
+        OriginRequestPolicy(
+            "OriginRequestPolicy",
+            OriginRequestPolicyConfig=OriginRequestPolicyConfig(
+                Name=Join("-", [StackName, "OriginRequestPolicy"]),
+                CookiesConfig=OriginRequestCookiesConfig(
+                    CookieBehavior="none",
+                ),
+                HeadersConfig=OriginRequestHeadersConfig(
+                    HeaderBehavior="none",
+                ),
+                QueryStringsConfig=OriginRequestQueryStringsConfig(
+                    QueryStringBehavior="none",
+                ),
+            ),
+        )
+    )
+
     price_class_distribution = template.add_resource(
         Distribution(
             "PriceClassDistribution",
@@ -1011,6 +1060,7 @@ def create_template():
                 DefaultCacheBehavior=DefaultCacheBehavior(
                     TargetOriginId="default",
                     ViewerProtocolPolicy="allow-all",
+                    CachePolicyId=Ref(cache_policy),
                     ForwardedValues=ForwardedValues(QueryString=False),
                 ),
                 Enabled=True,
@@ -1050,10 +1100,10 @@ def create_template():
                 ],
                 DefaultCacheBehavior=DefaultCacheBehavior(
                     TargetOriginId="default",
+                    CachePolicyId=Ref(cache_policy),
+                    OriginRequestPolicyId=Ref(origin_request_policy),
                     Compress=True,
-                    ForwardedValues=ForwardedValues(QueryString=False),
                     ViewerProtocolPolicy="redirect-to-https",
-                    DefaultTTL=Ref(default_ttl_seconds),
                     LambdaFunctionAssociations=[
                         LambdaFunctionAssociation(
                             EventType="origin-request",
@@ -1079,14 +1129,16 @@ def create_template():
             ),
             DependsOn=[
                 bucket_policy,
+                log_bucket_policy,
                 log_ingester_policy,
+                edge_hook_role_policy,
                 edge_log_groups,
                 precondition_region_is_primary,
             ],
         )
     )
 
-    distribution_log_group = template.add_resource(
+    template.add_resource(
         LogGroup(
             "DistributionLogGroup",
             LogGroupName=Join("", ["/aws/cloudfront/", Ref(distribution)]),
@@ -1094,7 +1146,7 @@ def create_template():
         )
     )
 
-    bucket_log_group = template.add_resource(
+    template.add_resource(
         LogGroup(
             "BucketLogGroup",
             LogGroupName=Join("", ["/aws/s3/", Ref(bucket)]),
