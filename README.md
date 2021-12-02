@@ -11,22 +11,26 @@ usage-based billing, making it suitable for projects of any size.
 
 To generate the CloudFormation template:
 
-`python3 -m overengineered_cloudfront_s3_static_website`
+```
+env PYTHONPATH=src python3 -m overengineered_cloudfront_s3_static_website > template.json
+
+# or, using a flakes-compatible install of the Nix package manager:
+nix run . > template.json
+```
+
 
 To deploy a basic website with a CloudFront-generated domain name:
 
 ```
 aws cloudformation deploy --region us-east-1 --stack-name basic-distribution \
-    --template-file <(python3 -m overengineered_cloudfront_s3_static_website) \
-    --capabilities CAPABILITY_IAM
+    --template-file template.json --capabilities CAPABILITY_IAM
 ```
 
 To deploy a website with automatic TLS certificates (given your DNS is hosted on Route 53):
 
 ```
 aws cloudformation deploy --region us-east-1 --stack-name automatic-acm-distribution \
-    --template-file <(python3 -m overengineered_cloudfront_s3_static_website) \
-    --capabilities CAPABILITY_IAM \
+    --template-file template.json --capabilities CAPABILITY_IAM \
     --parameter-overrides DomainNames=example.com,www.example.com HostedZoneId=Z1XYZ12XYZ1XYZ
 ```
 
@@ -34,8 +38,7 @@ To deploy a website with an existing ACM certificate:
 
 ```
 aws cloudformation deploy --region us-east-1 --stack-name existing-acm-distribution \
-    --template-file <(python3 -m overengineered_cloudfront_s3_static_website) \
-    --capabilities CAPABILITY_IAM \
+    --template-file template.json --capabilities CAPABILITY_IAM \
     --parameter-overrides DomainNames=example.com,www.example.com \
     AcmCertificateArn=arn:aws:acm:us-east-1:123412341234:certificate/d3ad-b33f
 ```

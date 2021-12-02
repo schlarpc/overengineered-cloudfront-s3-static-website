@@ -1,0 +1,24 @@
+[build-system]
+requires = ["flit_core >=2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "overengineered_cloudfront_s3_static_website"
+authors = [
+    {name = "Chaz Schlarp", email = "schlarpc@gmail.com"},
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+]
+dynamic = ["version", "description"]
+dependencies = [
+    "awacs",
+    "boto3",
+    "troposphere"
+]
+
+[project.scripts]
+overengineered-cloudfront-s3-static-website = "overengineered_cloudfront_s3_static_website.cli:main"
+
+[project.urls]
+Source = "https://github.com/schlarpc/overengineered-cloudfront-s3-static-website"
