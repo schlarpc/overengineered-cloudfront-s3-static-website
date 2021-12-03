@@ -4,8 +4,8 @@ import functools
 import gzip
 import itertools
 import json
-import uuid
 import sys
+import uuid
 
 import boto3
 

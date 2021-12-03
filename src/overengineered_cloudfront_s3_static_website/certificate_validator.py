@@ -1,8 +1,9 @@
-import boto3
 import enum
 import json
-import jmespath
 import os
+
+import boto3
+import jmespath
 
 
 class EnvVars(enum.Enum):
