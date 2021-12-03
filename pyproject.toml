@@ -22,3 +22,7 @@ overengineered-cloudfront-s3-static-website = "overengineered_cloudfront_s3_stat
 
 [project.urls]
 Source = "https://github.com/schlarpc/overengineered-cloudfront-s3-static-website"
+
+[tool.isort]
+combine_as_imports = true
+profile = "black"
