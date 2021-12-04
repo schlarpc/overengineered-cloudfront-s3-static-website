@@ -3,7 +3,19 @@ import inspect
 import pathlib
 
 from awacs import logs, s3, sqs, sts
-from awacs.aws import Allow, PolicyDocument, Principal, Statement
+from awacs.aws import (
+    Allow,
+    Bool,
+    Condition as StatementCondition,
+    Deny,
+    Everybody,
+    PolicyDocument,
+    Principal,
+    SecureTransport,
+    SourceAccount,
+    Statement,
+    StringEquals,
+)
 from troposphere import (
     AccountId,
     And,
@@ -350,10 +362,6 @@ def create_template():
     log_bucket = template.add_resource(
         Bucket(
             "LogBucket",
-            # S3 requires this ACL (regardless of bucket policy) or s3:PutBucketLogging fails.
-            # When the CloudFront distribution is created, it adds an additional bucket ACL.
-            # That ACL is not possible to model in CloudFormation.
-            AccessControl="LogDeliveryWrite",
             LifecycleConfiguration=LifecycleConfiguration(
                 Rules=[
                     LifecycleRule(ExpirationInDays=1, Status="Enabled"),
@@ -396,9 +404,6 @@ def create_template():
         )
     )
 
-    # Not strictly necessary, as ACLs should take care of this access. However, CloudFront docs
-    # state "In some circumstances [...] S3 resets permissions on the bucket to the default value",
-    # and this allows logging to work without any ACLs in place.
     log_bucket_policy = template.add_resource(
         BucketPolicy(
             "LogBucketPolicy",
@@ -406,6 +411,10 @@ def create_template():
             PolicyDocument=PolicyDocument(
                 Version="2012-10-17",
                 Statement=[
+                    # The next statement is not strictly necessary, as CloudFront automatically
+                    # creates an ACL to allow log delivery. However, this statement allows logging
+                    # to continue working without that ACL, and CloudFront docs warn that
+                    # "In some circumstances, [...] S3 resets [ACLs] on the bucket to the default value".
                     Statement(
                         Effect=Allow,
                         Principal=Principal("Service", "delivery.logs.amazonaws.com"),
@@ -413,18 +422,18 @@ def create_template():
                         Resource=[
                             Join("/", [GetAtt(log_bucket, "Arn"), "cloudfront", "*"])
                         ],
+                        Condition=StatementCondition(
+                            StringEquals(SourceAccount, AccountId),
+                        ),
                     ),
                     Statement(
                         Effect=Allow,
-                        Principal=Principal("Service", "delivery.logs.amazonaws.com"),
-                        Action=[s3.ListBucket],
-                        Resource=[Join("/", [GetAtt(log_bucket, "Arn")])],
-                    ),
-                    Statement(
-                        Effect=Allow,
-                        Principal=Principal("Service", "s3.amazonaws.com"),
+                        Principal=Principal("Service", "logging.s3.amazonaws.com"),
                         Action=[s3.PutObject],
                         Resource=[Join("/", [GetAtt(log_bucket, "Arn"), "s3", "*"])],
+                        Condition=StatementCondition(
+                            StringEquals(SourceAccount, AccountId),
+                        ),
                     ),
                 ],
             ),
