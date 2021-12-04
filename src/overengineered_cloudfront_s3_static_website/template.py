@@ -160,6 +160,21 @@ def read_static_file(filename, mode="r"):
         return f.read()
 
 
+def generate_enforced_tls_statement(bucket_arn) -> Statement:
+    return Statement(
+        Effect=Deny,
+        Principal=Principal(Everybody),
+        Action=[s3.Action("*")],
+        Resource=[
+            bucket_arn,
+            Join("/", [bucket_arn, "*"]),
+        ],
+        Condition=StatementCondition(
+            Bool(SecureTransport, False),
+        ),
+    )
+
+
 def create_template():
     template = Template(
         Description=(
@@ -435,6 +450,7 @@ def create_template():
                             StringEquals(SourceAccount, AccountId),
                         ),
                     ),
+                    generate_enforced_tls_statement(GetAtt(log_bucket, "Arn")),
                 ],
             ),
         )
@@ -573,6 +589,7 @@ def create_template():
                         Action=[s3.GetObject],
                         Resource=[Join("", [GetAtt(bucket, "Arn"), "/*"])],
                     ),
+                    generate_enforced_tls_statement(GetAtt(bucket, "Arn")),
                 ],
             ),
         )
