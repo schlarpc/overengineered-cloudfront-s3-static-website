@@ -811,4 +811,6 @@ def create_template():
 
     template.add_output(Output("ContentBucketArn", Value=GetAtt(bucket, "Arn")))
 
+    template.add_output(Output("ContentBucketName", Value=Ref(bucket)))
+
     return template
