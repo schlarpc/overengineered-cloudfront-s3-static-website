@@ -333,7 +333,7 @@ def create_template():
             ),
             Policies=[
                 PolicyProperty(
-                    PolicyName="DLQPolicy",
+                    PolicyName="ForwardToDLQ",
                     PolicyDocument=PolicyDocument(
                         Version="2012-10-17",
                         Statement=[
@@ -464,11 +464,11 @@ def create_template():
         )
     )
 
-    log_ingester_policy = template.add_resource(
+    log_ingester_execution_logs_policy = template.add_resource(
         PolicyType(
-            "LogIngesterPolicy",
+            "LogIngesterExecutionLogsPolicy",
             Roles=[Ref(log_ingester_role)],
-            PolicyName="IngestLogPolicy",
+            PolicyName="WriteExecutionLogs",
             PolicyDocument=PolicyDocument(
                 Version="2012-10-17",
                 Statement=[
@@ -476,42 +476,38 @@ def create_template():
                         Effect=Allow,
                         Action=[logs.CreateLogStream, logs.PutLogEvents],
                         Resource=[
-                            Join(
-                                ":",
-                                [
-                                    "arn",
-                                    Partition,
-                                    "logs",
-                                    Region,
-                                    AccountId,
-                                    "log-group",
-                                    "/aws/cloudfront/*",
-                                ],
-                            ),
-                            Join(
-                                ":",
-                                [
-                                    "arn",
-                                    Partition,
-                                    "logs",
-                                    Region,
-                                    AccountId,
-                                    "log-group",
-                                    "/aws/s3/*",
-                                ],
-                            ),
                             GetAtt(log_ingester_log_group, "Arn"),
                         ],
-                    ),
-                    Statement(
-                        Effect=Allow,
-                        Action=[s3.GetObject],
-                        Resource=[Join("", [GetAtt(log_bucket, "Arn"), "/*"])],
                     ),
                 ],
             ),
         )
     )
+
+    log_ingester_read_web_logs_policy = template.add_resource(
+        PolicyType(
+            "LogIngesterReadWebLogsPolicy",
+            Roles=[Ref(log_ingester_role)],
+            PolicyName="ReadWebLogs",
+            PolicyDocument=PolicyDocument(
+                Version="2012-10-17",
+                Statement=[
+                    Statement(
+                        Effect=Allow,
+                        Action=[s3.GetObject],
+                        Resource=[Join("/", [GetAtt(log_bucket, "Arn"), "*"])],
+                    ),
+                ],
+            ),
+        )
+    )
+
+    # these "leaf" nodes of the logging resources need explicit DependsOn statements
+    log_ingestion_dependencies = [
+        log_bucket_policy,
+        log_ingester_execution_logs_policy,
+        log_ingester_read_web_logs_policy,
+    ]
 
     bucket = template.add_resource(
         Bucket(
@@ -560,7 +556,7 @@ def create_template():
                 IgnorePublicAcls=True,
                 RestrictPublicBuckets=True,
             ),
-            DependsOn=[log_bucket_policy],
+            DependsOn=log_ingestion_dependencies,
         )
     )
 
@@ -761,15 +757,14 @@ def create_template():
                 ),
             ),
             DependsOn=[
-                bucket_policy,
-                log_bucket_policy,
-                log_ingester_policy,
                 precondition_region_is_primary,
-            ],
+                bucket_policy,
+            ]
+            + log_ingestion_dependencies,
         )
     )
 
-    template.add_resource(
+    distribution_log_group = template.add_resource(
         LogGroup(
             "DistributionLogGroup",
             LogGroupName=Join("", ["/aws/cloudfront/", Ref(distribution)]),
@@ -777,11 +772,36 @@ def create_template():
         )
     )
 
-    template.add_resource(
+    bucket_log_group = template.add_resource(
         LogGroup(
             "BucketLogGroup",
             LogGroupName=Join("", ["/aws/s3/", Ref(bucket)]),
             RetentionInDays=If(retention_defined, Ref(log_retention_days), NoValue),
+        )
+    )
+
+    # Since this policy is being added after the distribution and bucket are created,
+    # the Lambda function could receive logs before it has permission to write to CloudWatch Logs.
+    # This is unlikely due to log delivery delays and Lambda's async invoke redrives,
+    # but it's _possible_ to lose log entries that occur before the stack is fully deployed.
+    template.add_resource(
+        PolicyType(
+            "LogIngesterWriteWebLogsPolicy",
+            Roles=[Ref(log_ingester_role)],
+            PolicyName="WriteWebLogs",
+            PolicyDocument=PolicyDocument(
+                Version="2012-10-17",
+                Statement=[
+                    Statement(
+                        Effect=Allow,
+                        Action=[logs.CreateLogStream, logs.PutLogEvents],
+                        Resource=[
+                            GetAtt(distribution_log_group, "Arn"),
+                            GetAtt(bucket_log_group, "Arn"),
+                        ],
+                    ),
+                ],
+            ),
         )
     )
 
