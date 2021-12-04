@@ -7,6 +7,7 @@ from awacs.aws import Allow, PolicyDocument, Principal, Statement
 from troposphere import (
     AccountId,
     And,
+    AWSHelperFn,
     Condition,
     Equals,
     FindInMap,
@@ -22,18 +23,12 @@ from troposphere import (
     Ref,
     Region,
     Select,
+    Split,
     StackName,
-    Tags,
     Template,
 )
-from troposphere.awslambda import (
-    Code,
-    DeadLetterConfig,
-    Environment,
-    Function,
-    Permission,
-)
-from troposphere.certificatemanager import Certificate
+from troposphere.awslambda import Code, DeadLetterConfig, Function, Permission
+from troposphere.certificatemanager import Certificate, DomainValidationOption
 from troposphere.cloudformation import WaitConditionHandle
 from troposphere.cloudfront import (
     CacheCookiesConfig,
@@ -60,7 +55,6 @@ from troposphere.cloudfront import (
     S3OriginConfig,
     ViewerCertificate,
 )
-from troposphere.events import Rule, Target
 from troposphere.iam import PolicyProperty, PolicyType, Role
 from troposphere.logs import LogGroup
 from troposphere.s3 import (
@@ -82,7 +76,7 @@ from troposphere.s3 import (
 )
 from troposphere.sqs import Queue
 
-from . import certificate_validator, log_ingest
+from . import log_ingest
 
 CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
     1,
@@ -103,6 +97,7 @@ CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
     1827,
     3653,
 ]
+MAX_DOMAINS_PER_CERTIFICATE = 10  # default quota, maxes out at 100
 PYTHON_RUNTIME = "python3.8"
 
 
@@ -111,6 +106,31 @@ class NotificationConfiguration(NotificationConfiguration):
         **NotificationConfiguration.props,
         "EventBridgeConfiguration": (dict, False),
     }
+
+
+class ListChecker(AWSHelperFn):
+    def __init__(self, template, name, items, *, delimiter=",", default_value=""):
+        self._template = template
+        self._name = name
+        self._items = items
+        self._delimiter = delimiter
+        self._default_value = default_value
+
+    def _extract_value(self, index):
+        padding = self._delimiter.join([self._default_value] * (index + 1))
+        joined = Join(self._delimiter, [Join(self._delimiter, self._items), padding])
+        exploded = Split(self._delimiter, joined)
+        return Select(index, exploded)
+
+    def _add_existence_condition(self, index):
+        condition_name = f"{self._name}ListIdx{index}Exists"
+        self._template.add_condition(
+            condition_name, Not(Equals(self._extract_value(index), self._default_value))
+        )
+        return condition_name
+
+    def exists(self, index) -> str:
+        return self._add_existence_condition(index)
 
 
 def add_condition(template, name, condition):
@@ -549,124 +569,7 @@ def create_template():
         )
     )
 
-    certificate_validator_dlq = template.add_resource(
-        Queue(
-            "CertificateValidatorDLQ",
-            MessageRetentionPeriod=int(datetime.timedelta(days=14).total_seconds()),
-            KmsMasterKeyId="alias/aws/sqs",
-            Condition=should_create_certificate,
-        )
-    )
-
-    certificate_validator_role = template.add_resource(
-        Role(
-            "CertificateValidatorRole",
-            AssumeRolePolicyDocument=PolicyDocument(
-                Version="2012-10-17",
-                Statement=[
-                    Statement(
-                        Effect="Allow",
-                        Principal=Principal("Service", "lambda.amazonaws.com"),
-                        Action=[sts.AssumeRole],
-                    )
-                ],
-            ),
-            Policies=[
-                PolicyProperty(
-                    PolicyName="DLQPolicy",
-                    PolicyDocument=PolicyDocument(
-                        Version="2012-10-17",
-                        Statement=[
-                            Statement(
-                                Effect=Allow,
-                                Action=[sqs.SendMessage],
-                                Resource=[GetAtt(certificate_validator_dlq, "Arn")],
-                            )
-                        ],
-                    ),
-                )
-            ],
-            # TODO scope down
-            ManagedPolicyArns=[
-                "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-                "arn:aws:iam::aws:policy/AmazonRoute53FullAccess",
-                "arn:aws:iam::aws:policy/AWSCertificateManagerReadOnly",
-            ],
-            Condition=should_create_certificate,
-        )
-    )
-
-    certificate_validator_function = template.add_resource(
-        Function(
-            "CertificateValidatorFunction",
-            Runtime=PYTHON_RUNTIME,
-            Handler="index.{}".format(certificate_validator.handler.__name__),
-            Code=Code(ZipFile=inspect.getsource(certificate_validator)),
-            MemorySize=256,
-            Timeout=300,
-            Role=GetAtt(certificate_validator_role, "Arn"),
-            DeadLetterConfig=DeadLetterConfig(
-                TargetArn=GetAtt(certificate_validator_dlq, "Arn")
-            ),
-            Environment=Environment(
-                Variables={
-                    certificate_validator.EnvVars.HOSTED_ZONE_ID.name: Ref(
-                        hosted_zone_id
-                    )
-                }
-            ),
-            Condition=should_create_certificate,
-        )
-    )
-
-    certificate_validator_log_group = template.add_resource(
-        LogGroup(
-            "CertificateValidatorLogGroup",
-            LogGroupName=Join(
-                "", ["/aws/lambda/", Ref(certificate_validator_function)]
-            ),
-            RetentionInDays=If(retention_defined, Ref(log_retention_days), NoValue),
-            Condition=should_create_certificate,
-        )
-    )
-
-    certificate_validator_rule = template.add_resource(
-        Rule(
-            "CertificateValidatorRule",
-            EventPattern={
-                "detail-type": ["AWS API Call via CloudTrail"],
-                "detail": {
-                    "eventSource": ["acm.amazonaws.com"],
-                    "eventName": ["AddTagsToCertificate"],
-                    "requestParameters": {
-                        "tags": {
-                            "key": [certificate_validator_function.title],
-                            "value": [GetAtt(certificate_validator_function, "Arn")],
-                        }
-                    },
-                },
-            },
-            Targets=[
-                Target(
-                    Id="certificate-validator-lambda",
-                    Arn=GetAtt(certificate_validator_function, "Arn"),
-                )
-            ],
-            DependsOn=[certificate_validator_log_group],
-            Condition=should_create_certificate,
-        )
-    )
-
-    certificate_validator_permission = template.add_resource(
-        Permission(
-            "CertificateValidatorPermission",
-            FunctionName=GetAtt(certificate_validator_function, "Arn"),
-            Action="lambda:InvokeFunction",
-            Principal="events.amazonaws.com",
-            SourceArn=GetAtt(certificate_validator_rule, "Arn"),
-            Condition=should_create_certificate,
-        )
-    )
+    dns_names_checker = ListChecker(template, "DNSNames", Ref(dns_names))
 
     certificate = template.add_resource(
         Certificate(
@@ -674,14 +577,17 @@ def create_template():
             DomainName=Select(0, Ref(dns_names)),
             SubjectAlternativeNames=Ref(dns_names),  # duplicate first name works fine
             ValidationMethod="DNS",
-            Tags=Tags(
-                **{
-                    certificate_validator_function.title: GetAtt(
-                        certificate_validator_function, "Arn"
-                    )
-                }
-            ),
-            DependsOn=[certificate_validator_permission],
+            DomainValidationOptions=[
+                If(
+                    dns_names_checker.exists(idx),
+                    DomainValidationOption(
+                        DomainName=Select(idx, Ref(dns_names)),
+                        HostedZoneId=Ref(hosted_zone_id),
+                    ),
+                    NoValue,
+                )
+                for idx in range(MAX_DOMAINS_PER_CERTIFICATE)
+            ],
             Condition=should_create_certificate,
         )
     )
