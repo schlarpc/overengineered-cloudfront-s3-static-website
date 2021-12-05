@@ -1,4 +1,6 @@
+import base64
 import datetime
+import gzip
 import inspect
 import pathlib
 
@@ -160,6 +162,11 @@ def add_mapping(template, name, mapping):
 def read_static_file(filename, mode="r"):
     with (pathlib.Path(__file__).parent / "static" / filename).open(mode) as f:
         return f.read()
+
+
+def pack_python_module(source: str) -> str:
+    encoded = base64.b85encode(gzip.compress(source.encode("utf-8"))).decode("utf-8")
+    return f"import base64,gzip;exec(gzip.decompress(base64.b85decode('{encoded}')))"
 
 
 def generate_enforced_tls_statement(bucket_arn) -> Statement:
@@ -399,7 +406,7 @@ def create_template():
             "LogIngester",
             Runtime=PYTHON_RUNTIME,
             Handler="index.{}".format(log_ingest.handler.__name__),
-            Code=Code(ZipFile=inspect.getsource(log_ingest)),
+            Code=Code(ZipFile=pack_python_module(inspect.getsource(log_ingest))),
             MemorySize=256,
             Timeout=300,
             Role=GetAtt(log_ingester_role, "Arn"),
