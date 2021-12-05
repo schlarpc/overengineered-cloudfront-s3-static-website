@@ -29,7 +29,16 @@ class LogEvent(collections.namedtuple("LogEntry", ["timestamp", "message"])):
 @functools.lru_cache()
 def get_client(service, region_name=None):
     kwargs = {"region_name": region_name} if region_name else {}
-    return boto3.client(service, **kwargs)
+    client = boto3.client(service, **kwargs)
+    if service == "logs":
+        client.meta.events.register("before-sign.logs.PutLogEvents", gzip_request_body)
+    return client
+
+
+def gzip_request_body(request, **_):
+    if "Content-Encoding" not in request.headers:
+        request.headers.add_header("Content-Encoding", "gzip")
+        request.data = gzip.compress(request.body)
 
 
 def get_s3_stream(key_basename, body):
