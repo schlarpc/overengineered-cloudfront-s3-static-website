@@ -69,6 +69,7 @@ from troposphere.cloudfront import (
 )
 from troposphere.iam import PolicyProperty, PolicyType, Role
 from troposphere.logs import LogGroup
+from troposphere.route53 import AliasTarget, RecordSet, RecordSetGroup
 from troposphere.s3 import (
     AbortIncompleteMultipartUpload,
     Bucket,
@@ -109,7 +110,8 @@ CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
     1827,
     3653,
 ]
-MAX_DOMAINS_PER_CERTIFICATE = 10  # default quota, maxes out at 100
+# TODO make precondition or parameter pattern for domain count
+MAX_DOMAIN_NAMES = 10  # default quota for ACM, maxes out at 100
 PYTHON_RUNTIME = "python3.8"
 
 
@@ -190,10 +192,12 @@ def create_template():
             "aws": {
                 # the region with the control plane for CloudFront, IAM, Route 53, etc
                 "PrimaryRegion": "us-east-1",
+                "CloudFrontHostedZoneId": "Z2FDTNDATAQYW2",
             },
             # no idea if CloudFront Functions work in China
             "aws-cn": {
                 "PrimaryRegion": "cn-north-1",
+                "CloudFrontHostedZoneId": "Z3RFFRIM2A3IF5",
             },
         },
     )
@@ -201,7 +205,12 @@ def create_template():
     acm_certificate_arn = template.add_parameter(
         Parameter(
             "AcmCertificateArn",
-            Description="Existing ACM certificate to use for serving TLS. Overrides HostedZoneId.",
+            Description=" ".join(
+                (
+                    "Existing ACM certificate to use for serving TLS.",
+                    "If left blank while HostedZoneId is set, a new certificate will be created.",
+                )
+            ),
             Type="String",
             AllowedPattern="(arn:[^:]+:acm:[^:]+:[^:]+:certificate/.+|)",
             Default="",
@@ -211,7 +220,12 @@ def create_template():
     hosted_zone_id = template.add_parameter(
         Parameter(
             "HostedZoneId",
-            Description="Existing Route 53 zone to use for validating a new TLS certificate.",
+            Description=" ".join(
+                (
+                    "Existing Route 53 zone for the domains specified in DomainNames.",
+                    "Used for validating new TLS certificates and creating DNS records.",
+                )
+            ),
             Type="String",
             AllowedPattern="(Z[A-Z0-9]+|)",
             Default="",
@@ -221,7 +235,12 @@ def create_template():
     dns_names = template.add_parameter(
         Parameter(
             "DomainNames",
-            Description="Comma-separated list of additional domain names to serve.",
+            Description=" ".join(
+                (
+                    "Comma-separated list of additional domain names to serve.",
+                    f"Up to {MAX_DOMAIN_NAMES} domains can be specified.",
+                )
+            ),
             Type="CommaDelimitedList",
             Default="",
         )
@@ -265,6 +284,22 @@ def create_template():
         )
     )
 
+    create_dns_records = template.add_parameter(
+        Parameter(
+            "CreateDnsRecords",
+            Description=" ".join(
+                (
+                    "Create A and AAAA records pointing to CloudFront in Route 53.",
+                    "This operation will fail if any of those records already exist.",
+                    "Requires DomainNames and HostedZoneId to be set.",
+                )
+            ),
+            Type="String",
+            Default="false",
+            AllowedValues=["true", "false"],
+        )
+    )
+
     retention_defined = add_condition(
         template, "RetentionDefined", Not(Equals(Ref(log_retention_days), 0))
     )
@@ -295,6 +330,16 @@ def create_template():
 
     using_dns_names = add_condition(
         template, "UsingDnsNames", Not(Equals(Select(0, Ref(dns_names)), ""))
+    )
+
+    should_create_dns_records = add_condition(
+        template,
+        "ShouldCreateDnsRecords",
+        And(
+            Equals(Ref(create_dns_records), "true"),
+            Condition(using_dns_names),
+            Condition(using_hosted_zone),
+        ),
     )
 
     is_primary_region = "IsPrimaryRegion"
@@ -608,7 +653,7 @@ def create_template():
                     ),
                     NoValue,
                 )
-                for idx in range(MAX_DOMAINS_PER_CERTIFICATE)
+                for idx in range(MAX_DOMAIN_NAMES)
             ],
             Condition=should_create_certificate,
         )
@@ -784,7 +829,7 @@ def create_template():
     # the Lambda function could receive logs before it has permission to write to CloudWatch Logs.
     # This is unlikely due to log delivery delays and Lambda's async invoke redrives,
     # but it's _possible_ to lose log entries that occur before the stack is fully deployed.
-    template.add_resource(
+    log_ingester_write_web_logs_policy = template.add_resource(
         PolicyType(
             "LogIngesterWriteWebLogsPolicy",
             Roles=[Ref(log_ingester_role)],
@@ -802,6 +847,45 @@ def create_template():
                     ),
                 ],
             ),
+        )
+    )
+
+    log_ingestion_dependencies = [
+        *log_ingestion_dependencies,
+        log_ingester_write_web_logs_policy,
+    ]
+
+    record_sets = []
+    for idx in range(MAX_DOMAIN_NAMES):
+        for record_type in ("A", "AAAA"):
+            record_sets.append(
+                If(
+                    dns_names_checker.exists(idx),
+                    RecordSet(
+                        Name=Select(idx, Ref(dns_names)),
+                        Type=record_type,
+                        AliasTarget=AliasTarget(
+                            DNSName=If(
+                                using_price_class_hack,
+                                GetAtt(price_class_distribution, "DomainName"),
+                                GetAtt(distribution, "DomainName"),
+                            ),
+                            HostedZoneId=FindInMap(
+                                partition_config, Partition, "CloudFrontHostedZoneId"
+                            ),
+                        ),
+                    ),
+                    NoValue,
+                )
+            )
+
+    template.add_resource(
+        RecordSetGroup(
+            "DnsRecords",
+            HostedZoneId=Ref(hosted_zone_id),
+            RecordSets=record_sets,
+            DependsOn=log_ingestion_dependencies,
+            Condition=should_create_dns_records,
         )
     )
 

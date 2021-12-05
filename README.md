@@ -57,7 +57,6 @@ The template parameters also include some extra settings:
 
 * No custom HTTP error pages or header-based redirect support
 * No metric/alarm dashboard (can be costly, so probably should be disabled by default?)
-* No registration of distribution as an alias record in Route 53
 * No usage of KMS encryption for S3 buckets (AWS limitations)
     * After further research, it appears this can be made to work for the log bucket, but not the content bucket; this is a low-priority TODO
 * Directory URLs must end in "/" to get index.html retrieval behavior (e.g http://example.com/foo will not return the content at foo/index.html)
