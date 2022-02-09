@@ -52,6 +52,7 @@ from troposphere.cloudfront import (
     CacheQueryStringsConfig,
     CloudFrontOriginAccessIdentity,
     CloudFrontOriginAccessIdentityConfig,
+    CustomErrorResponse,
     DefaultCacheBehavior,
     Distribution,
     DistributionConfig,
@@ -778,6 +779,14 @@ def create_template():
                             )
                         ),
                     )
+                ],
+                CustomErrorResponses=[
+                    CustomErrorResponse(
+                        ErrorCachingMinTTL=60,
+                        ErrorCode=403,
+                        ResponseCode=200,
+                        ResponsePagePath="/redirect.html",
+                    ),
                 ],
                 DefaultCacheBehavior=DefaultCacheBehavior(
                     TargetOriginId="default",
