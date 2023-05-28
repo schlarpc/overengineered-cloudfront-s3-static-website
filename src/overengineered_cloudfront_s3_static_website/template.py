@@ -709,30 +709,35 @@ def create_template():
         )
     )
 
-    viewer_request_function_name = Join("-", [StackName, "ViewerRequestFunction"])
+    cloudfront_functions = {}
 
-    template.add_resource(
-        LogGroup(
-            "ViewerRequestFunctionLogGroup",
-            LogGroupName=Join(
-                "", ["/aws/cloudfront/function/", viewer_request_function_name]
-            ),
-            RetentionInDays=If(retention_defined, Ref(log_retention_days), NoValue),
-        )
-    )
+    for function_type in ("viewer-request", "viewer-response"):
+        function_resource_prefix = function_type.title().replace('-', '') + "Function"
+        function_name = Join("-", [StackName, function_resource_prefix])
 
-    viewer_request_function = template.add_resource(
-        CloudFrontFunction(
-            "ViewerRequestFunction",
-            Name=viewer_request_function_name,
-            FunctionCode=read_static_file("viewer_request.js"),
-            AutoPublish=True,
-            FunctionConfig=FunctionConfig(
-                Comment=viewer_request_function_name,
-                Runtime="cloudfront-js-1.0",
-            ),
+        function_log_group = template.add_resource(
+            LogGroup(
+                f"{function_resource_prefix}LogGroup",
+                LogGroupName=Join(
+                    "", ["/aws/cloudfront/function/", function_name]
+                ),
+                RetentionInDays=If(retention_defined, Ref(log_retention_days), NoValue),
+            )
         )
-    )
+
+        cloudfront_functions[function_type] = template.add_resource(
+            CloudFrontFunction(
+                function_resource_prefix,
+                Name=function_name,
+                FunctionCode=read_static_file(function_type.replace("-", "_") + ".js"),
+                AutoPublish=True,
+                FunctionConfig=FunctionConfig(
+                    Comment=function_name,
+                    Runtime="cloudfront-js-1.0",
+                ),
+                DependsOn=[function_log_group],
+            )
+        )
 
     price_class_distribution = template.add_resource(
         Distribution(
@@ -787,9 +792,10 @@ def create_template():
                     ViewerProtocolPolicy="redirect-to-https",
                     FunctionAssociations=[
                         FunctionAssociation(
-                            EventType="viewer-request",
-                            FunctionARN=GetAtt(viewer_request_function, "FunctionARN"),
-                        ),
+                            EventType=function_type,
+                            FunctionARN=function.get_att("FunctionARN"),
+                        )
+                        for function_type, function in cloudfront_functions.items()
                     ],
                 ),
                 HttpVersion="http2",
