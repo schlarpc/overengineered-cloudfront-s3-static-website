@@ -50,8 +50,6 @@ from troposphere.cloudfront import (
     CachePolicy,
     CachePolicyConfig,
     CacheQueryStringsConfig,
-    CloudFrontOriginAccessIdentity,
-    CloudFrontOriginAccessIdentityConfig,
     DefaultCacheBehavior,
     Distribution,
     DistributionConfig,
@@ -60,6 +58,8 @@ from troposphere.cloudfront import (
     FunctionConfig,
     Logging,
     Origin,
+    OriginAccessControl,
+    OriginAccessControlConfig,
     OriginRequestCookiesConfig,
     OriginRequestHeadersConfig,
     OriginRequestPolicy,
@@ -593,7 +593,7 @@ def create_template():
                 ServerSideEncryptionConfiguration=[
                     ServerSideEncryptionRule(
                         ServerSideEncryptionByDefault=ServerSideEncryptionByDefault(
-                            # Origin Access Identities can't use KMS
+                            # Origin Access Control can't use AWS-managed KMS
                             SSEAlgorithm="AES256"
                         )
                     )
@@ -612,11 +612,14 @@ def create_template():
         )
     )
 
-    origin_access_identity = template.add_resource(
-        CloudFrontOriginAccessIdentity(
-            "CloudFrontIdentity",
-            CloudFrontOriginAccessIdentityConfig=CloudFrontOriginAccessIdentityConfig(
-                Comment=GetAtt(bucket, "Arn")
+    origin_access_control = template.add_resource(
+        OriginAccessControl(
+            "OriginAccessControl",
+            OriginAccessControlConfig=OriginAccessControlConfig(
+                Name=Join("-", [StackName, "OriginAccessControl"]),
+                OriginAccessControlOriginType="s3",
+                SigningBehavior="always",
+                SigningProtocol="sigv4",
             ),
         )
     )
@@ -630,12 +633,12 @@ def create_template():
                 Statement=[
                     Statement(
                         Effect=Allow,
-                        Principal=Principal(
-                            "CanonicalUser",
-                            GetAtt(origin_access_identity, "S3CanonicalUserId"),
-                        ),
+                        Principal=Principal("Service", "cloudfront.amazonaws.com"),
                         Action=[s3.GetObject],
                         Resource=[Join("", [GetAtt(bucket, "Arn"), "/*"])],
+                        Condition=StatementCondition(
+                            StringEquals(SourceAccount, AccountId),
+                        ),
                     ),
                     generate_enforced_tls_statement(GetAtt(bucket, "Arn")),
                 ],
@@ -773,15 +776,8 @@ def create_template():
                     Origin(
                         Id="default",
                         DomainName=GetAtt(bucket, "DomainName"),
-                        S3OriginConfig=S3OriginConfig(
-                            OriginAccessIdentity=Join(
-                                "",
-                                [
-                                    "origin-access-identity/cloudfront/",
-                                    Ref(origin_access_identity),
-                                ],
-                            )
-                        ),
+                        S3OriginConfig=S3OriginConfig(OriginAccessIdentity=""),
+                        OriginAccessControlId=origin_access_control.ref(),
                     )
                 ],
                 DefaultCacheBehavior=DefaultCacheBehavior(
