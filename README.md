@@ -55,10 +55,17 @@ The template parameters also include some extra settings:
 
 ## Limitations / To-do
 
-* No custom HTTP error pages or header-based redirect support
-* No metric/alarm dashboard (can be costly, so probably should be disabled by default?)
-* No usage of KMS encryption for S3 buckets (AWS limitations)
-    * After further research, it appears this can be made to work for the log bucket, but not the content bucket; this is a low-priority TODO
-* Directory URLs must end in "/" to get index.html retrieval behavior (e.g http://example.com/foo will not return the content at foo/index.html)
-* No KMS encryption for CloudWatch logs
+* No custom HTTP error pages
+    * i.e. https://docs.aws.amazon.com/AmazonS3/latest/userguide/CustomErrorDocSupport.html
+* No rule-based redirect support
+    * i.e. https://docs.aws.amazon.com/AmazonS3/latest/userguide/how-to-page-redirect.html
+    * Per-object redirects using `x-amz-website-redirect-location` are implemented
+* The index document name cannot be configured, and is always `index.html`
+    * i.e. https://docs.aws.amazon.com/AmazonS3/latest/userguide/IndexDocumentSupport.html
+* Directory URLs must end in "/" to get index.html retrieval behavior
+    * e.g. `http://example.com/foo` will not return the content at `foo/index.html`
+* No metric/alarm dashboard
+    * This costs extra, so probably should be disabled by default if implemented
+* No usage of KMS encryption for S3 buckets or CloudWatch Logs
+    * This requires customer-managed KMS keys, which cost extra; this is a low-priority TODO
 * Access logs should be converted to JSON format for easier querying
