@@ -69,7 +69,7 @@ from troposphere.cloudfront import (
     S3OriginConfig,
     ViewerCertificate,
 )
-from troposphere.iam import PolicyProperty, PolicyType, Role
+from troposphere.iam import Policy, PolicyType, Role
 from troposphere.logs import LogGroup
 from troposphere.route53 import AliasTarget, RecordSet, RecordSetGroup
 from troposphere.s3 import (
@@ -384,7 +384,7 @@ def create_template():
                 ],
             ),
             Policies=[
-                PolicyProperty(
+                Policy(
                     PolicyName="ForwardToDLQ",
                     PolicyDocument=PolicyDocument(
                         Version="2012-10-17",
