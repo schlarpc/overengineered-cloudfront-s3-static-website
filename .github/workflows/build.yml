@@ -5,10 +5,10 @@
         "build": {
             "runs-on": "ubuntu-latest",
             "steps": [
-                {"uses": "actions/checkout@v2"},
-                {"uses": "cachix/install-nix-action@v16"},
+                {"uses": "actions/checkout@v7"},
+                {"uses": "cachix/install-nix-action@v31"},
                 {"run": "nix run > template.json"},
-                {"uses": "actions/upload-artifact@v2", "with": {"name": "template.json", "path": "template.json"}}
+                {"uses": "actions/upload-artifact@v7", "with": {"name": "template.json", "path": "template.json"}}
             ]
         }
     }
