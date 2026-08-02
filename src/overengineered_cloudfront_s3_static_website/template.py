@@ -50,6 +50,7 @@ from troposphere.cloudfront import (
     CachePolicy,
     CachePolicyConfig,
     CacheQueryStringsConfig,
+    CustomErrorResponse,
     DefaultCacheBehavior,
     Distribution,
     DistributionConfig,
@@ -293,6 +294,20 @@ def create_template():
         )
     )
 
+    not_found_page_path = template.add_parameter(
+        Parameter(
+            "NotFoundPagePath",
+            Description=" ".join(
+                (
+                    "Object path served in place of missing pages, e.g. /404.html.",
+                    "Empty returns the origin's raw XML error document instead.",
+                )
+            ),
+            Type="String",
+            Default="",
+        )
+    )
+
     noncurrent_version_retention_days = template.add_parameter(
         Parameter(
             "NoncurrentVersionRetentionDays",
@@ -325,6 +340,10 @@ def create_template():
 
     retention_defined = add_condition(
         template, "RetentionDefined", Not(Equals(Ref(log_retention_days), 0))
+    )
+
+    using_not_found_page = add_condition(
+        template, "UsingNotFoundPage", Not(Equals(Ref(not_found_page_path), ""))
     )
 
     noncurrent_version_retention_defined = add_condition(
@@ -805,6 +824,20 @@ def create_template():
                     Bucket=GetAtt(log_bucket, "DomainName"), Prefix="cloudfront/"
                 ),
                 DefaultRootObject="index.html",
+                CustomErrorResponses=If(
+                    using_not_found_page,
+                    [
+                        # S3 answers requests for missing objects with 403, not 404,
+                        # because the bucket policy grants GetObject but not ListBucket.
+                        CustomErrorResponse(
+                            ErrorCode=error_code,
+                            ResponseCode=404,
+                            ResponsePagePath=Ref(not_found_page_path),
+                        )
+                        for error_code in (403, 404)
+                    ],
+                    NoValue,
+                ),
                 Origins=[
                     Origin(
                         Id="default",
