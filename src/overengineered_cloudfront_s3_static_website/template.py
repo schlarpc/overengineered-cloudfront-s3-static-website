@@ -78,6 +78,7 @@ from troposphere.s3 import (
     Bucket,
     BucketEncryption,
     BucketPolicy,
+    EventBridgeConfiguration,
     LambdaConfigurations,
     LifecycleConfiguration,
     LifecycleRule,
@@ -118,13 +119,6 @@ CLOUDWATCH_LOGS_RETENTION_OPTIONS = [
 # TODO make precondition or parameter pattern for domain count
 MAX_DOMAIN_NAMES = 10  # default quota for ACM, maxes out at 100
 PYTHON_RUNTIME = "python3.8"
-
-
-class NotificationConfiguration(NotificationConfiguration):
-    props = {
-        **NotificationConfiguration.props,
-        "EventBridgeConfiguration": (dict, False),
-    }
 
 
 class ListChecker(AWSHelperFn):
@@ -636,7 +630,9 @@ def create_template():
             ),
             VersioningConfiguration=VersioningConfiguration(Status="Enabled"),
             NotificationConfiguration=NotificationConfiguration(
-                EventBridgeConfiguration={},
+                EventBridgeConfiguration=EventBridgeConfiguration(
+                    EventBridgeEnabled=True
+                ),
             ),
             LoggingConfiguration=LoggingConfiguration(
                 DestinationBucketName=Ref(log_bucket), LogFilePrefix="s3/"
