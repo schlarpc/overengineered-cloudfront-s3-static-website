@@ -82,12 +82,14 @@ from troposphere.s3 import (
     LifecycleRule,
     LifecycleRuleTransition,
     LoggingConfiguration,
+    NoncurrentVersionExpiration,
     NotificationConfiguration,
     OwnershipControls,
     OwnershipControlsRule,
     PublicAccessBlockConfiguration,
     ServerSideEncryptionByDefault,
     ServerSideEncryptionRule,
+    VersioningConfiguration,
 )
 from troposphere.sqs import Queue
 
@@ -291,6 +293,20 @@ def create_template():
         )
     )
 
+    noncurrent_version_retention_days = template.add_parameter(
+        Parameter(
+            "NoncurrentVersionRetentionDays",
+            Description=" ".join(
+                (
+                    "Days to keep noncurrent object versions, which allow recovery",
+                    "from an accidental overwrite or delete. 0 means indefinite retention.",
+                )
+            ),
+            Type="Number",
+            Default=90,
+        )
+    )
+
     create_dns_records = template.add_parameter(
         Parameter(
             "CreateDnsRecords",
@@ -309,6 +325,12 @@ def create_template():
 
     retention_defined = add_condition(
         template, "RetentionDefined", Not(Equals(Ref(log_retention_days), 0))
+    )
+
+    noncurrent_version_retention_defined = add_condition(
+        template,
+        "NoncurrentVersionRetentionDefined",
+        Not(Equals(Ref(noncurrent_version_retention_days), 0)),
     )
 
     using_price_class_hack = add_condition(
@@ -581,8 +603,19 @@ def create_template():
                         ),
                         Status="Enabled",
                     ),
+                    If(
+                        noncurrent_version_retention_defined,
+                        LifecycleRule(
+                            NoncurrentVersionExpiration=NoncurrentVersionExpiration(
+                                NoncurrentDays=Ref(noncurrent_version_retention_days)
+                            ),
+                            Status="Enabled",
+                        ),
+                        NoValue,
+                    ),
                 ]
             ),
+            VersioningConfiguration=VersioningConfiguration(Status="Enabled"),
             NotificationConfiguration=NotificationConfiguration(
                 EventBridgeConfiguration={},
             ),
